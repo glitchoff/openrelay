@@ -35,7 +35,7 @@ echo ""
 echo -e "${YELLOW}▶ Installing dependencies...${NC}"
 
 pkg update -y -q
-pkg install -y python openssh sshpass
+pkg install -y python openssh sshpass lsof
 
 echo -e "${YELLOW}▶ Installing Python websockets...${NC}"
 pip install websockets
@@ -268,6 +268,9 @@ if [ -f bridge.pid ]; then
     kill $(cat bridge.pid) 2>/dev/null || true
     rm bridge.pid
 fi
+if command -v lsof &>/dev/null; then
+    lsof -t -i :8080 | xargs kill -9 2>/dev/null || true
+fi
 sleep 0.5
 
 nohup env \
@@ -308,6 +311,9 @@ pkill -f bridge.py || true
 if [ -f bridge.pid ]; then
     kill $(cat bridge.pid) 2>/dev/null || true
     rm bridge.pid
+fi
+if command -v lsof &>/dev/null; then
+    lsof -t -i :8080 | xargs kill -9 2>/dev/null || true
 fi
 sleep 0.5
 nohup env OPENDECK_PORT="$OPENDECK_PORT" OPENDECK_SSH_TARGET="$OPENDECK_SSH_TARGET" OPENDECK_SSH_PORT="$OPENDECK_SSH_PORT" SSHPASS="$SSHPASS" python bridge.py > bridge.log 2>&1 &
