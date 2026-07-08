@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🔥 OpenDeck
 
-## Getting Started
+Code editor for Android. Your dev machine, in your pocket.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Phone / PWA
+    ↕  WebSocket
+OpenDeck Bridge (Termux)
+    ↕  SSH
+Your Machine
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## How it works
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Install the bridge in **Termux** (Android terminal emulator)
+2. Bridge opens a WebSocket server on your phone's localhost
+3. Bridge connects to your remote machine via SSH
+4. Open the **PWA** in your phone browser
+5. PWA connects to the bridge — you have a full code editor
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Quick start
 
-## Learn More
+```bash
+# In Termux, run:
+curl -sL https://raw.githubusercontent.com/abhay/opendeck/main/scripts/setup.sh | bash
+```
 
-To learn more about Next.js, take a look at the following resources:
+Follow the prompts — enter your SSH target (user@host) and password. The bridge starts automatically.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Then open **https://opendeck.dev** in your phone browser and connect to `ws://127.0.0.1:8080`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Architecture
 
-## Deploy on Vercel
+```
+┌──────────────────────┐
+│   PWA (Phone Browser)│  CodeMirror editor + xterm.js terminal
+│   ws://localhost:8080 │
+└─────────┬────────────┘
+          │  WebSocket (JSON)
+┌─────────▼────────────┐
+│  Bridge (Termux)     │  Python asyncio + websockets
+│  SSH proxy           │  SSH subprocess + PTY
+└─────────┬────────────┘
+          │  SSH
+┌─────────▼────────────┐
+│  Dev Machine          │  Your code, your tools
+│  Linux / macOS / WSL  │
+└──────────────────────┘
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Development
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+pnpm install
+pnpm dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+## License
+
+MIT
