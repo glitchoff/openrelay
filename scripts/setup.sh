@@ -261,6 +261,15 @@ echo -e "${GREEN}▶ Starting bridge...${NC}"
 echo ""
 
 cd "$BRIDGE_DIR"
+
+# Kill any existing bridge process using port 8080 or matching bridge.py
+pkill -f bridge.py || true
+if [ -f bridge.pid ]; then
+    kill $(cat bridge.pid) 2>/dev/null || true
+    rm bridge.pid
+fi
+sleep 0.5
+
 nohup env \
   OPENDECK_PORT="8080" \
   OPENDECK_SSH_TARGET="$TARGET" \
@@ -295,6 +304,12 @@ cat > "$BRIDGE_DIR/restart.sh" << 'RSEOF'
 #!/data/data/com.termux/files/usr/bin/bash
 cd ~/.opendeck
 source config.sh
+pkill -f bridge.py || true
+if [ -f bridge.pid ]; then
+    kill $(cat bridge.pid) 2>/dev/null || true
+    rm bridge.pid
+fi
+sleep 0.5
 nohup env OPENDECK_PORT="$OPENDECK_PORT" OPENDECK_SSH_TARGET="$OPENDECK_SSH_TARGET" OPENDECK_SSH_PORT="$OPENDECK_SSH_PORT" SSHPASS="$SSHPASS" python bridge.py > bridge.log 2>&1 &
 echo $! > bridge.pid
 echo "Bridge restarted (PID: $(cat bridge.pid))"
