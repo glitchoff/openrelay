@@ -22,7 +22,7 @@ Your Machine
 
 ```bash
 # In Termux, run:
-curl -sL https://raw.githubusercontent.com/abhay/opendeck/main/scripts/setup.sh | bash
+curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh | bash
 ```
 
 Follow the prompts — enter your SSH target (user@host) and password. The bridge starts automatically.

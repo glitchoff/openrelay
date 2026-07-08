@@ -2,8 +2,8 @@
 #
 # OpenDeck Setup — run this in Termux to install & start the bridge
 #
-# Usage: bash <(curl -sL https://raw.githubusercontent.com/abhay/opendeck/main/scripts/setup.sh)
-# Or:    curl -sL https://raw.githubusercontent.com/abhay/opendeck/main/scripts/setup.sh -o setup.sh && bash setup.sh
+# Usage: bash <(curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh)
+# Or:    curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh -o setup.sh && bash setup.sh
 #
 
 set -e

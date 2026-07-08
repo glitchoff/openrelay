@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
-const INSTALL_CMD = `bash <(curl -sL https://raw.githubusercontent.com/abhay/opendeck/main/scripts/setup.sh)`;
+const INSTALL_CMD = `bash <(curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh)`;
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
