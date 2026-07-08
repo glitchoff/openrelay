@@ -9,9 +9,35 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = useCallback(async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        return;
+      } catch (err) {
+        console.error("Clipboard copy failed, using fallback:", err);
+      }
+    }
+    
+    // Fallback for insecure HTTP contexts
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    textArea.style.opacity = "0";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand("copy");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Fallback copy failed:", err);
+    }
+    document.body.removeChild(textArea);
   }, [text]);
 
   return (
