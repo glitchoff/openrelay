@@ -41,7 +41,11 @@ echo -e "${YELLOW}▶ Installing Python websockets and asyncssh...${NC}"
 pip install websockets asyncssh
 
 # --- Create bridge directory ---
-BRIDGE_DIR="$HOME/.opendeccat > "$BRIDGE_DIR/bridge.py" << 'PYEOF'
+BRIDGE_DIR="$HOME/.opendeck"
+mkdir -p "$BRIDGE_DIR"
+
+# --- Write the bridge script ---
+cat > "$BRIDGE_DIR/bridge.py" << 'PYEOF'
 #!/data/data/com.termux/files/usr/bin/env python3
 import asyncio, json, os, sys, stat, subprocess
 
