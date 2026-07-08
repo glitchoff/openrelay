@@ -45,9 +45,17 @@ export function ExplorerPanel() {
   const readFile = useConnectionStore((s) => s.readFile);
   const openFile = useEditorStore((s) => s.openFile);
   const status = useConnectionStore((s) => s.status);
-  const closePanel = useUiStore((s) => s.closePanel);
+  const projectPath = useConnectionStore((s) => s.projectPath);
+  const setActiveView = useUiStore((s) => s.setActiveView);
 
-  const [currentPath, setCurrentPath] = useState("/home");
+  const [currentPath, setCurrentPath] = useState(projectPath || "/home");
+
+  useEffect(() => {
+    if (projectPath) {
+      setCurrentPath(projectPath);
+    }
+  }, [projectPath]);
+
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -84,7 +92,17 @@ export function ExplorerPanel() {
       try {
         const content = await readFile(fullPath);
         openFile(fullPath, content);
-        closePanel("explorer");
+        
+        // Save to recent files
+        const loaded = localStorage.getItem("opendeck:recent_files");
+        let recents: string[] = [];
+        if (loaded) {
+          try { recents = JSON.parse(loaded); } catch {}
+        }
+        const updated = [fullPath, ...recents.filter((p) => p !== fullPath)].slice(0, 8);
+        localStorage.setItem("opendeck:recent_files", JSON.stringify(updated));
+
+        setActiveView("editor");
       } catch {}
     }
   }

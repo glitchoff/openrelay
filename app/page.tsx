@@ -31,7 +31,7 @@ export default function Home() {
   const [port, setPort] = useState("8080");
 
   function handleConnect() {
-    router.push(`/term?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`);
+    router.push(`/dashboard?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`);
   }
 
   return (

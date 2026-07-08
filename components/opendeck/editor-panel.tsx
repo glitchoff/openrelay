@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { EditorView, basicSetup } from "codemirror";
 import { EditorState } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
@@ -13,6 +13,8 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { useEditorStore } from "@/store/editor-store";
 import { useConnectionStore } from "@/store/connection-store";
 import { useUiStore } from "@/store/ui-store";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { WorkspaceDashboard } from "./workspace-dashboard";
 
 function extForPath(path: string) {
   const ext = path.split(".").pop()?.toLowerCase();
@@ -102,69 +104,76 @@ export function EditorPanel() {
   }, [activeFile, openFiles, writeFile, markClean]);
 
   if (!file) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 px-6">
-        <svg viewBox="0 0 24 24" fill="none" className="size-10 text-zinc-700">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <p className="text-sm text-zinc-600 text-center">
-          Open a file from the<br />
-          <button onClick={() => openPanel("explorer")} className="text-orange-500 underline underline-offset-2">
-            file explorer
-          </button>
-        </p>
-      </div>
-    );
+    return <WorkspaceDashboard />;
   }
 
   return (
     <div className="flex flex-col h-full">
+      {/* Editor toolbar */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 shrink-0 bg-zinc-900/50">
-        <div className="flex items-center gap-2 min-w-0">
-          {openFiles && Object.keys(openFiles).length > 1 && (
-            <button
-              onClick={() => closeFile(file.path)}
-              className="p-1 rounded hover:bg-zinc-800 text-zinc-500"
-            >
-              <svg viewBox="0 0 24 24" fill="none" className="size-4">
-                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </button>
-          )}
-          <span className="text-xs font-medium text-zinc-300 truncate">
-            {file.path.split("/").pop()}
-          </span>
-          {file.dirty && <span className="text-[10px] text-yellow-500 shrink-0">unsaved</span>}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Popover>
+            <PopoverTrigger
+              render={
+                <button className="flex items-center gap-1 px-2 py-1 rounded hover:bg-zinc-850 text-zinc-300 font-medium text-xs max-w-[200px] truncate transition-colors select-none cursor-pointer">
+                  <span className="truncate">{file.path.split("/").pop()}</span>
+                  <svg viewBox="0 0 24 24" fill="none" className="size-3 text-zinc-500 shrink-0">
+                    <path d="M19 9l-7 7-7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              }
+            />
+            <PopoverContent className="w-64 bg-zinc-950 border border-zinc-850 p-1 rounded-xl shadow-2xl text-zinc-300">
+              <div className="px-3 py-1.5 border-b border-zinc-900/60 text-[9px] font-semibold text-zinc-500 uppercase tracking-wider font-mono">
+                Open Files ({Object.keys(openFiles).length})
+              </div>
+              <div className="max-h-56 overflow-y-auto py-1">
+                {Object.values(openFiles).map((f) => (
+                  <div
+                    key={f.path}
+                    onClick={() => {
+                      useEditorStore.getState().setActiveFile(f.path);
+                    }}
+                    className={`flex items-center justify-between w-full px-3 py-2 rounded-lg text-left text-xs transition-colors cursor-pointer select-none ${
+                      f.path === activeFile
+                        ? "bg-zinc-850 text-zinc-100"
+                        : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+                    }`}
+                  >
+                    <span className="flex-1 truncate pr-2 font-mono">
+                      {f.path.split("/").pop()}
+                    </span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {f.dirty && <span className="size-1.5 rounded-full bg-yellow-500" />}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeFile(f.path);
+                        }}
+                        className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" className="size-3">
+                          <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {file.dirty && <span className="size-1.5 rounded-full bg-yellow-500 shrink-0" />}
         </div>
+        
         <button
           onClick={handleSave}
           disabled={!file.dirty}
-          className="text-xs font-medium px-3 py-1.5 rounded-md bg-orange-500 text-black disabled:opacity-40 disabled:cursor-not-allowed hover:bg-orange-400 active:bg-orange-600 transition-colors shrink-0"
+          className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-orange-500 text-black disabled:opacity-40 disabled:cursor-not-allowed hover:bg-orange-400 active:bg-orange-600 transition-colors shrink-0"
         >
           Save
         </button>
       </div>
-
-      {/* Tab bar for open files */}
-      {Object.keys(openFiles).length > 1 && (
-        <div className="flex items-center gap-0.5 px-2 py-1 bg-[#121212] border-b border-zinc-800 shrink-0 overflow-x-auto">
-          {Object.values(openFiles).map((f) => (
-            <button
-              key={f.path}
-              onClick={() => useEditorStore.getState().setActiveFile(f.path)}
-              className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-medium whitespace-nowrap transition-colors ${
-                f.path === activeFile
-                  ? "bg-zinc-800 text-zinc-200"
-                  : "text-zinc-500 hover:text-zinc-400"
-              }`}
-            >
-              {f.path.split("/").pop()}
-              {f.dirty && <span className="text-yellow-500">●</span>}
-            </button>
-          ))}
-        </div>
-      )}
 
       <div ref={editorRef} className="flex-1 overflow-hidden" />
     </div>

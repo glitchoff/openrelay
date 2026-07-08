@@ -22,6 +22,8 @@ interface ConnectionState {
   listDir: (path: string) => Promise<FileEntry[]>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, content: string) => Promise<void>;
+  projectPath: string | null;
+  setProjectPath: (path: string | null) => void;
 }
 
 export const useConnectionStore = create<ConnectionState>((set, get) => ({
@@ -31,6 +33,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   ws: null,
   pending: new Map(),
   onStdout: null,
+  projectPath: null,
+  setProjectPath: (path) => set({ projectPath: path }),
 
   connect: (host: string, port: number) => {
     const old = get().ws;
@@ -78,11 +82,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     };
 
     ws.onclose = () => {
-      set({ status: "disconnected", ws: null, pending: new Map() });
+      set({ status: "disconnected", ws: null, pending: new Map(), projectPath: null });
     };
 
     ws.onerror = () => {
-      set({ status: "disconnected" });
+      set({ status: "disconnected", projectPath: null });
     };
   },
 
@@ -92,7 +96,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       ws.send(JSON.stringify({ type: "disconnect" }));
       ws.close();
     }
-    set({ status: "disconnected", ws: null, pending: new Map() });
+    set({ status: "disconnected", ws: null, pending: new Map(), projectPath: null });
   },
 
   send: (msg: OutgoingMsg) => {

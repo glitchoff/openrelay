@@ -1,10 +1,13 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useUiStore } from "@/store/ui-store";
 import { useEditorStore } from "@/store/editor-store";
+import { useConnectionStore } from "@/store/connection-store";
 import { EditorPanel } from "./editor-panel";
 import { ExplorerPanel } from "./explorer-panel";
 import { TerminalPanel } from "./terminal-panel";
+import { HomeScreen } from "./home-screen";
 
 function FilesIcon() {
   return (
@@ -33,72 +36,106 @@ function TerminalIcon() {
 }
 
 export function Dashboard() {
-  const openPanels = useUiStore((s) => s.openPanels);
+  const projectPath = useConnectionStore((s) => s.projectPath);
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
-  const togglePanel = useUiStore((s) => s.togglePanel);
-  const closePanel = useUiStore((s) => s.closePanel);
-  const activeFile = useEditorStore((s) => s.activeFile);
-  const openFiles = useEditorStore((s) => s.openFiles);
 
-  const explorerOpen = openPanels.includes("explorer");
-  const terminalOpen = openPanels.includes("terminal");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isProgrammaticRef = useRef(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const currentFile = activeFile ? openFiles[activeFile] : null;
+  // Sync scroll position when activeView changes
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || projectPath === null) return;
+
+    const views = ["explorer", "editor", "terminal"];
+    const index = views.indexOf(activeView);
+    if (index === -1) return;
+
+    const expectedScrollLeft = index * container.clientWidth;
+    if (Math.abs(container.scrollLeft - expectedScrollLeft) > 5) {
+      isProgrammaticRef.current = true;
+      container.scrollTo({ left: expectedScrollLeft, behavior: "smooth" });
+
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        isProgrammaticRef.current = false;
+      }, 350);
+    }
+  }, [activeView, projectPath]);
+
+  // Adjust scroll alignment on resize
+  useEffect(() => {
+    const handleResize = () => {
+      const container = containerRef.current;
+      if (!container || projectPath === null) return;
+      const views = ["explorer", "editor", "terminal"];
+      const index = views.indexOf(activeView);
+      if (index !== -1) {
+        container.scrollTo({ left: index * container.clientWidth, behavior: "auto" });
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [activeView, projectPath]);
+
+  const handleScroll = () => {
+    const container = containerRef.current;
+    if (!container || isProgrammaticRef.current) return;
+
+    const scrollLeft = container.scrollLeft;
+    const width = container.clientWidth;
+    if (width === 0) return;
+
+    const index = Math.round(scrollLeft / width);
+    const views = ["explorer", "editor", "terminal"] as const;
+    const targetView = views[index];
+
+    if (targetView && targetView !== activeView) {
+      setActiveView(targetView);
+    }
+  };
+
+  // If no project is selected, show the Home selection screen
+  if (projectPath === null) {
+    return <HomeScreen />;
+  }
 
   return (
-    <div className="fixed inset-0 flex flex-col bg-black text-zinc-100">
-      {/* Main content area */}
-      <div className="flex-1 flex min-h-0 relative">
-        {/* Center: Editor (always rendered) */}
-        <div className="flex-1 min-w-0">
-          <EditorPanel />
-        </div>
-
-        {/* Left drawer overlay: Explorer */}
-        <div
-          className={`absolute inset-y-0 left-0 w-[85vw] max-w-sm bg-zinc-950 border-r border-zinc-800 z-20 shadow-2xl transition-transform duration-200 ease-out ${
-            explorerOpen ? "translate-x-0" : "-translate-x-full"
-          }`}
-        >
+    <div className="fixed inset-0 flex flex-col bg-black text-zinc-100 overflow-hidden">
+      {/* Swipeable container */}
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="flex-1 flex overflow-x-auto snap-x snap-mandatory scrollbar-none bg-black select-none touch-pan-x"
+        style={{
+          scrollBehavior: "smooth",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
+        {/* Left: File Explorer */}
+        <div className="w-full h-full shrink-0 snap-start bg-zinc-950/30">
           <ExplorerPanel />
         </div>
 
-        {/* Right drawer overlay: Terminal */}
-        <div
-          className={`absolute inset-y-0 right-0 w-[85vw] max-w-lg bg-zinc-950 border-l border-zinc-800 z-20 shadow-2xl transition-transform duration-200 ease-out ${
-            terminalOpen ? "translate-x-0" : "translate-x-full"
-          }`}
-        >
-          <TerminalPanel />
+        {/* Center: Editor */}
+        <div className="w-full h-full shrink-0 snap-start bg-black">
+          <EditorPanel />
         </div>
 
-        {/* Backdrop when a panel is open */}
-        {(explorerOpen || terminalOpen) && (
-          <div
-            onClick={() => {
-              if (explorerOpen) closePanel("explorer");
-              if (terminalOpen) closePanel("terminal");
-            }}
-            className="absolute inset-0 bg-black/50 z-10"
-          />
-        )}
+        {/* Right: Terminal */}
+        <div className="w-full h-full shrink-0 snap-start bg-zinc-950/30">
+          <TerminalPanel />
+        </div>
       </div>
 
       {/* Bottom tab bar */}
       <div className="flex items-center justify-around px-2 py-1.5 bg-[#0f0f0f] border-t border-zinc-900 shrink-0 safe-area-bottom">
         <button
-          onClick={() => {
-            if (activeView === "explorer") {
-              closePanel("explorer");
-              setActiveView("editor");
-            } else {
-              openPanel("explorer");
-              setActiveView("explorer");
-            }
-          }}
+          onClick={() => setActiveView("explorer")}
           className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
-            explorerOpen || activeView === "explorer"
+            activeView === "explorer"
               ? "text-orange-500"
               : "text-zinc-500 hover:text-zinc-300"
           }`}
@@ -108,13 +145,9 @@ export function Dashboard() {
         </button>
 
         <button
-          onClick={() => {
-            closePanel("explorer");
-            closePanel("terminal");
-            setActiveView("editor");
-          }}
+          onClick={() => setActiveView("editor")}
           className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
-            activeView === "editor" && !explorerOpen && !terminalOpen
+            activeView === "editor"
               ? "text-orange-500"
               : "text-zinc-500 hover:text-zinc-300"
           }`}
@@ -124,17 +157,9 @@ export function Dashboard() {
         </button>
 
         <button
-          onClick={() => {
-            if (terminalOpen) {
-              closePanel("terminal");
-              setActiveView("editor");
-            } else {
-              openPanel("terminal");
-              setActiveView("terminal");
-            }
-          }}
+          onClick={() => setActiveView("terminal")}
           className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
-            terminalOpen || activeView === "terminal"
+            activeView === "terminal"
               ? "text-orange-500"
               : "text-zinc-500 hover:text-zinc-300"
           }`}

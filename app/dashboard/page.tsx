@@ -1,7 +1,7 @@
 "use client";
 
-import { useSearchParams, Suspense } from "next/navigation";
-import { useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, Suspense } from "react";
 import { useConnectionStore } from "@/store/connection-store";
 import { Dashboard } from "@/components/opendeck/dashboard";
 
