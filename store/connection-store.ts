@@ -73,8 +73,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
             break;
           }
           case "error": {
-            const p = get().pending.get("error");
-            if (p) { p.reject(new Error(msg.message)); get().pending.delete("error"); }
+            const key = msg.path || "error";
+            const p = get().pending.get(key);
+            if (p) { p.reject(new Error(msg.message)); get().pending.delete(key); }
             break;
           }
         }

@@ -44,7 +44,7 @@ interface FolderPickerProps {
 
 function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
   const listDir = useConnectionStore((s) => s.listDir);
-  const [currentPath, setCurrentPath] = useState("/home");
+  const [currentPath, setCurrentPath] = useState("~");
   const [dirs, setDirs] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,15 +61,17 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
         .sort((a, b) => a.localeCompare(b));
       setDirs(folderNames);
       setCurrentPath(path);
+      setLoading(false);
     } catch (e: any) {
       setError(e.message || "Failed to load directory");
+      setLoading(false);
+      throw e;
     }
-    setLoading(false);
   }, [listDir]);
 
   useEffect(() => {
-    loadDirs("/home").catch(() => {
-      // If /home fails, try root /
+    loadDirs("~").catch(() => {
+      // If ~ fails, try root /
       loadDirs("/");
     });
   }, []);

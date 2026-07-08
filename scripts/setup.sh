@@ -102,13 +102,16 @@ async def proxy_ssh(websocket, target, port):
                     path = msg["path"]
                     python_cmd = (
                         f"import os, json; "
-                        f"path = {repr(path)}; "
+                        f"path = os.path.expanduser({repr(path)}); "
                         f"res = []; "
                         f"try: "
-                        f"  for e in os.scandir(path): "
+                        f"  for name in os.listdir(path): "
                         f"    try: "
-                        f"      s = e.stat(follow_symlinks=False); "
-                        f"      res.append({{'name': e.name, 'is_dir': e.is_dir(), 'is_symlink': e.is_symlink(), 'size': s.st_size}}); "
+                        f"      full = os.path.join(path, name); "
+                        f"      is_dir = os.path.isdir(full); "
+                        f"      is_link = os.path.islink(full); "
+                        f"      size = os.path.getsize(full) if not is_dir else 0; "
+                        f"      res.append({{'name': name, 'is_dir': is_dir, 'is_symlink': is_link, 'size': size}}); "
                         f"    except: pass; "
                         f"  print(json.dumps({{'status': 'success', 'entries': res}})); "
                         f"except Exception as err: "
@@ -128,12 +131,12 @@ async def proxy_ssh(websocket, target, port):
                             await websocket.send(json.dumps({"type": "list_dir_result", "path": path, "entries": data["entries"]}))
                             continue
                     except: pass
-                    await websocket.send(json.dumps({"type": "error", "message": f"Failed to list directory: {stdout or stderr}"}))
+                    await websocket.send(json.dumps({"type": "error", "path": path, "message": f"Failed to list directory: {stdout or stderr}"}))
                 elif t == "read_file":
                     path = msg["path"]
                     python_cmd = (
                         f"import sys, base64; "
-                        f"path = {repr(path)}; "
+                        f"path = os.path.expanduser({repr(path)}); "
                         f"try: "
                         f"  with open(path, 'rb') as f: "
                         f"    print(base64.b64encode(f.read()).decode('utf-8')); "
@@ -143,7 +146,7 @@ async def proxy_ssh(websocket, target, port):
                     stdout, stderr = await run_ssh_command(target, port, f"python3 -c {repr(python_cmd)}")
                     output = stdout.strip()
                     if output.startswith("ERROR:"):
-                        await websocket.send(json.dumps({"type": "error", "message": output[6:]}))
+                        await websocket.send(json.dumps({"type": "error", "path": path, "message": output[6:]}))
                         continue
                     if output:
                         try:
@@ -155,14 +158,14 @@ async def proxy_ssh(websocket, target, port):
                     stdout, _ = await run_ssh_command(target, port, f"python -c {repr(python_cmd)}")
                     output = stdout.strip()
                     if output.startswith("ERROR:"):
-                        await websocket.send(json.dumps({"type": "error", "message": output[6:]}))
+                        await websocket.send(json.dumps({"type": "error", "path": path, "message": output[6:]}))
                     else:
                         try:
                             import base64
                             content = base64.b64decode(output).decode('utf-8', errors='replace')
                             await websocket.send(json.dumps({"type": "read_file_result", "path": path, "content": content}))
                         except Exception as err:
-                            await websocket.send(json.dumps({"type": "error", "message": f"Failed to read file: {stdout or stderr or str(err)}"}))
+                            await websocket.send(json.dumps({"type": "error", "path": path, "message": f"Failed to read file: {stdout or stderr or str(err)}"}))
                 elif t == "write_file":
                     path = msg["path"]
                     content = msg["content"]
@@ -170,7 +173,7 @@ async def proxy_ssh(websocket, target, port):
                     content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
                     python_cmd = (
                         f"import base64; "
-                        f"path = {repr(path)}; "
+                        f"path = os.path.expanduser({repr(path)}); "
                         f"content = base64.b64decode({repr(content_b64)}); "
                         f"try: "
                         f"  with open(path, 'wb') as f: "
@@ -189,7 +192,7 @@ async def proxy_ssh(websocket, target, port):
                     if output == "SUCCESS":
                         await websocket.send(json.dumps({"type": "write_file_result", "path": path, "success": True}))
                     else:
-                        await websocket.send(json.dumps({"type": "error", "message": f"Failed to write file: {stdout or stderr or output}"}))
+                        await websocket.send(json.dumps({"type": "error", "path": path, "message": f"Failed to write file: {stdout or stderr or output}"}))
                 elif t == "disconnect": break
         except Exception: pass
 

@@ -84,6 +84,7 @@ export interface WriteFileResult {
 export interface ErrorResult {
   type: "error";
   message: string;
+  path?: string;
 }
 
 export type IncomingMsg =

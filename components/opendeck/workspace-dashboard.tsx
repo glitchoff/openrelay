@@ -41,7 +41,7 @@ export function WorkspaceDashboard() {
   const openFiles = useEditorStore((s) => s.openFiles);
   const closeFile = useEditorStore((s) => s.closeFile);
 
-  const [currentPath, setCurrentPath] = useState(projectPath || "/home");
+  const [currentPath, setCurrentPath] = useState(projectPath || "~");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

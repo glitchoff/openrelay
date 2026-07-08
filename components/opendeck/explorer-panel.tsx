@@ -48,7 +48,7 @@ export function ExplorerPanel() {
   const projectPath = useConnectionStore((s) => s.projectPath);
   const setActiveView = useUiStore((s) => s.setActiveView);
 
-  const [currentPath, setCurrentPath] = useState(projectPath || "/home");
+  const [currentPath, setCurrentPath] = useState(projectPath || "~");
 
   useEffect(() => {
     if (projectPath) {
