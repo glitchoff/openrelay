@@ -13,16 +13,17 @@ function DashboardContent() {
   useEffect(() => {
     const host = searchParams.get("host") || "127.0.0.1";
     const port = parseInt(searchParams.get("port") || "8080");
-    if (status === "disconnected") {
-      connect(host, port);
-    }
+    connect(host, port);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (status === "disconnected") {
+  if (status !== "connected") {
     return (
       <div className="fixed inset-0 flex flex-col items-center justify-center bg-black gap-4 px-6">
         <div className="size-6 rounded-full border-2 border-zinc-700 border-t-orange-500 animate-spin" />
-        <p className="text-sm text-zinc-500">Connecting...</p>
+        <p className="text-sm text-zinc-500">
+          {status === "connecting" ? "Connecting..." : "Waiting for bridge..."}
+        </p>
       </div>
     );
   }
