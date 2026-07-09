@@ -128,6 +128,11 @@ async def _ssh(cmd: str, input_data: bytes | None = None, timeout: int = 30) -> 
         return "", str(e), -1
 
 # ── Command builders (POSIX vs PowerShell) ──────────────────────
+def _ps_cmd(cmd: str) -> str:
+    """Wrap a PowerShell command to run via cmd.exe safely (base64 avoids quoting hell)."""
+    encoded = base64.b64encode(cmd.encode("utf-16le")).decode("ascii")
+    return f"powershell -NoProfile -EncodedCommand {encoded}"
+
 def _posix_path(path: str) -> str:
     """Replace leading ~ with $HOME so bash expands inside double quotes."""
     if path.startswith('~/'):
@@ -144,8 +149,9 @@ def _ps_path(path: str) -> str:
 def build_list_dir(path: str, is_windows: bool) -> str:
     if is_windows:
         prefix = _ps_path(path)
-        return (f"{prefix};Get-ChildItem -Path $p -Force | "
-                f"ForEach-Object {{ \"$(if($_.PSIsContainer){{'d'}}else{{'f'}})`t$($_.Length)`t$($_.Name)\" }}")
+        cmd = (f"{prefix};Get-ChildItem -Path $p -Force | "
+               f"ForEach-Object {{ \"$(if($_.PSIsContainer){{'d'}}else{{'f'}})`t$($_.Length)`t$($_.Name)\" }}")
+        return _ps_cmd(cmd)
     p = _posix_path(path)
     return (f"cd \"{p}\" 2>/dev/null; "
             f"for e in * .*; do "
@@ -158,14 +164,14 @@ def build_list_dir(path: str, is_windows: bool) -> str:
 def build_read_file(path: str, is_windows: bool) -> str:
     if is_windows:
         prefix = _ps_path(path)
-        return f"{prefix};[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))"
+        return _ps_cmd(f"{prefix};[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))")
     p = _posix_path(path)
     return f"base64 < \"{p}\""
 
 def build_write_file(path: str, is_windows: bool) -> str:
     if is_windows:
         prefix = _ps_path(path)
-        return f"{prefix};[Convert]::FromBase64String([Console]::In.ReadToEnd())|ForEach-Object{{[IO.File]::WriteAllBytes($p,$_)}}"
+        return _ps_cmd(f"{prefix};[Convert]::FromBase64String([Console]::In.ReadToEnd())|ForEach-Object{{[IO.File]::WriteAllBytes($p,$_)}}")
     p = _posix_path(path)
     return f"base64 -d > \"{p}\""
 
