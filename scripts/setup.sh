@@ -321,7 +321,7 @@ class OpenRelayConnection:
 
         self.shells = {}
 
-        self.shell_counter = 0
+        self.shell_counter = -1  # first spawn yields id=0
 
         self.sftp = None
 
@@ -1607,6 +1607,31 @@ async def handler(websocket):
 
 
         # --------------------------------------------------------
+        # Spawn initial PTY 0
+        # --------------------------------------------------------
+
+        initial_pty_id = await connection.start_shell(
+            cols=cols,
+            rows=rows,
+        )
+
+        await connection.send({
+            "type": "pty_created",
+            "pty_id": initial_pty_id,
+        })
+
+        shell_task = asyncio.create_task(
+            connection.read_shell(
+                initial_pty_id,
+            ),
+        )
+
+        connection.reader_tasks.append(
+            shell_task,
+        )
+
+
+        # --------------------------------------------------------
         # Run WebSocket reader (creates PTYs on demand)
         # --------------------------------------------------------
 
@@ -1618,7 +1643,7 @@ async def handler(websocket):
 
         )
 
-        reader_tasks.append(
+        connection.reader_tasks.append(
             websocket_task
         )
 

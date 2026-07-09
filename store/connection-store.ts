@@ -30,7 +30,9 @@ interface ConnectionState {
   projectPath: string | null;
   setProjectPath: (path: string | null) => void;
   connectionError: string | null;
+  _initialPtyId: number | null;
   _ptyStdout: Map<number, (data: string) => void>;
+  takeInitialPty: () => number | null;
   createPty: (cwd?: string) => Promise<number>;
   closePty: (ptyId: number) => void;
   setOnPtyStdout: (ptyId: number, cb: ((data: string) => void) | null) => void;
@@ -45,6 +47,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   _pathToId: new Map(),
   _nextId: 1,
   onStdout: null,
+  _initialPtyId: null,
   _ptyStdout: new Map<number, (data: string) => void>(),
   projectPath: null,
   setProjectPath: (path) => set({ projectPath: path }),
@@ -108,6 +111,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
             if (p) {
               p.resolve(msg.pty_id);
               pending.delete("create_pty");
+            } else {
+              set({ _initialPtyId: msg.pty_id as number });
             }
             break;
           }
@@ -147,13 +152,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     ws.onclose = () => {
       // Only reset if this WS is still the active connection
       if (get().ws === ws) {
-        set({ status: "disconnected", ws: null, pending: new Map(), projectPath: null });
+        set({ status: "disconnected", ws: null, pending: new Map(), projectPath: null, _initialPtyId: null });
       }
     };
 
     ws.onerror = () => {
       if (get().ws === ws) {
-        set({ status: "disconnected", projectPath: null, connectionError: "WebSocket connection failed" });
+        set({ status: "disconnected", projectPath: null, connectionError: "WebSocket connection failed", _initialPtyId: null });
       }
     };
   },
@@ -175,9 +180,23 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   setOnStdout: (cb) => set({ onStdout: cb }),
 
   createPty: (cwd?: string) =>
-    new Promise<number>((resolve, reject) => {
+    new Promise<number>((resolve) => {
       const state = get();
-      state.pending.set("create_pty", { resolve, reject, path: "" } as Pending);
+      const timer = setTimeout(() => {
+        state.pending.delete("create_pty");
+        resolve(0);
+      }, 2000);
+      state.pending.set("create_pty", {
+        resolve: (v: unknown) => {
+          clearTimeout(timer);
+          resolve(v as number);
+        },
+        reject: () => {
+          clearTimeout(timer);
+          resolve(0);
+        },
+        path: "",
+      } as Pending);
       state.send({ type: "create_pty", cwd });
     }),
 
@@ -193,6 +212,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       else map.delete(ptyId);
       return { _ptyStdout: map };
     }),
+
+  takeInitialPty: () => {
+    const id = get()._initialPtyId;
+    if (id !== null) set({ _initialPtyId: null });
+    return id;
+  },
 
   listDir: (path: string) =>
     new Promise((resolve, reject) => {

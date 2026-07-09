@@ -70,7 +70,7 @@ def list_dir_entries(path: str) -> list:
 # ── per-connection handler ─────────────────────────────────────────────────────
 async def handler(websocket):
     ptys = {}
-    pty_counter = 0
+    pty_counter = -1  # first spawn yields id=0
     reader_tasks = []
 
     try:
@@ -272,6 +272,10 @@ async def handler(websocket):
 
                 elif t == "disconnect":
                     break
+
+        # Spawn initial PTY 0
+        initial_pty_id = await spawn_pty()
+        # pty_created is already sent by spawn_pty
 
         await handle_messages()
 

@@ -43,6 +43,7 @@ export function TerminalPanel() {
   const createPty = useConnectionStore((s) => s.createPty);
   const closePty = useConnectionStore((s) => s.closePty);
   const setOnPtyStdout = useConnectionStore((s) => s.setOnPtyStdout);
+  const takeInitialPty = useConnectionStore((s) => s.takeInitialPty);
 
   const terminals = useTerminalStore((s) => s.terminals);
   const activeId = useTerminalStore((s) => s.activeTerminal);
@@ -105,14 +106,25 @@ export function TerminalPanel() {
       creatingRef.current.add(t.id);
       (async () => {
         try {
-          const ptyId = await createPty(projectPath ?? undefined);
+          let ptyId: number;
+          // First terminal uses initial PTY 0 if available
+          if (t.id === "term-0") {
+            const initial = takeInitialPty();
+            if (initial !== null) {
+              ptyId = initial;
+            } else {
+              ptyId = await createPty(projectPath ?? undefined);
+            }
+          } else {
+            ptyId = await createPty(projectPath ?? undefined);
+          }
           setPtyId(t.id, ptyId);
         } catch {
           creatingRef.current.delete(t.id);
         }
       })();
     }
-  }, [status, terminals, projectPath, createPty, setPtyId]);
+  }, [status, terminals, projectPath, createPty, setPtyId, takeInitialPty]);
 
   // Clean up creating set when terminals are removed
   useEffect(() => {
