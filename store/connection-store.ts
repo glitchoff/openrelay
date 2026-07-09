@@ -17,7 +17,7 @@ interface ConnectionState {
   _nextId: number;
   onStdout: ((data: string) => void) | null;
 
-  connect: (host: string, port: number) => void;
+  connect: (host: string, port: number, password?: string) => void;
   disconnect: () => void;
   send: (msg: OutgoingMsg) => void;
   setOnStdout: (cb: ((data: string) => void) | null) => void;
@@ -43,7 +43,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   setProjectPath: (path) => set({ projectPath: path }),
   connectionError: null,
 
-  connect: (host: string, port: number) => {
+  connect: (host: string, port: number, password?: string) => {
     const { status, host: curHost, port: curPort } = get();
     // Reuse existing connection if already live or connecting to same target
     if (
@@ -62,7 +62,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
 
     ws.onopen = () => {
       set({ status: "connected" });
-      ws.send(JSON.stringify({ type: "connect" }));
+      const msg: any = { type: "connect" };
+      if (password) msg.password = password;
+      ws.send(JSON.stringify(msg));
     };
 
     ws.onmessage = (event) => {

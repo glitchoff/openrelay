@@ -178,31 +178,52 @@ async def handler(websocket):
             await websocket.send(json.dumps({"type": "error", "message": "First message must be connect"}))
             return
 
-        # Start master connection in background if not already running
-        if not os.path.exists(SOCKET_PATH):
-            await websocket.send(json.dumps({"type": "connecting", "host": SSH_TARGET, "port": SSH_PORT}))
-            
-            cmd = []
-            if SSHPASS:
-                cmd += ["sshpass", "-p", SSHPASS]
-            cmd += [
-                "ssh", "-M", "-S", SOCKET_PATH, 
-                "-p", str(SSH_PORT), 
-                "-N", "-f", 
-                "-o", "ControlPersist=10m", 
-                "-o", "StrictHostKeyChecking=no", 
-                SSH_TARGET
-            ]
-            
-            p = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await p.communicate()
-            if p.returncode != 0:
-                await websocket.send(json.dumps({"type": "error", "message": f"SSH connection failed: {stderr.decode('utf-8')}"}))
-                return
+        # Always delete old socket to force fresh auth
+        if os.path.exists(SOCKET_PATH):
+            try: os.remove(SOCKET_PATH)
+            except: pass
+
+        await websocket.send(json.dumps({"type": "connecting", "host": SSH_TARGET, "port": SSH_PORT}))
+
+        password = msg.get("password", SSHPASS)
+        tmpfile = None
+        cmd = []
+        if password:
+            tmpfile = os.path.join(SOCKET_DIR, f"sshpass_{os.getpid()}")
+            with open(tmpfile, "w") as f:
+                f.write(password)
+            os.chmod(tmpfile, 0o600)
+            cmd += ["sshpass", "-f", tmpfile]
+
+        cmd += [
+            "ssh", "-M", "-S", SOCKET_PATH, 
+            "-p", str(SSH_PORT), 
+            "-N", "-f", 
+            "-o", "ControlPersist=10m", 
+            "-o", "StrictHostKeyChecking=no", 
+            SSH_TARGET
+        ]
+
+        p = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await p.communicate()
+
+        # Clean up temp password file
+        if tmpfile and os.path.exists(tmpfile):
+            try: os.remove(tmpfile)
+            except: pass
+
+        if p.returncode != 0:
+            err = stderr.decode("utf-8")
+            # Remove stale socket so retry works
+            if os.path.exists(SOCKET_PATH):
+                try: os.remove(SOCKET_PATH)
+                except: pass
+            await websocket.send(json.dumps({"type": "error", "message": f"SSH connection failed: {err}"}))
+            return
 
         await websocket.send(json.dumps({"type": "connected", "host": SSH_TARGET, "port": SSH_PORT}))
 
