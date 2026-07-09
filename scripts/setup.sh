@@ -128,6 +128,32 @@ async def _ssh(cmd: str, input_data: bytes | None = None, timeout: int = 30) -> 
     except Exception as e:
         return "", str(e), -1
 
+# ── Command builders (POSIX vs PowerShell) ──────────────────────
+def build_list_dir(path: str, is_windows: bool) -> str:
+    if is_windows:
+        return (f"Get-ChildItem -Path '{path}' -Force | "
+                f"ForEach-Object {{ \"$(if($_.PSIsContainer){{'d'}}else{{'f'}})`t$($_.Length)`t$($_.Name)\" }}")
+    escaped = path.replace("'", "'\\''")
+    return (f"cd '{escaped}' 2>/dev/null || cd ~ 2>/dev/null; "
+            f"for e in * .*; do "
+            f"[ \"$e\" = \".\" -o \"$e\" = \"..\" ] && continue; "
+            f"if [ -L \"$e\" ]; then t=l; s=0; "
+            f"elif [ -d \"$e\" ]; then t=d; s=0; "
+            f"else s=$(wc -c < \"$e\" 2>/dev/null||echo 0); t=f; fi; "
+            f"printf '%s\\t%s\\t%s\\n' \"$t\" \"$s\" \"$e\"; done")
+
+def build_read_file(path: str, is_windows: bool) -> str:
+    if is_windows:
+        return f"[Convert]::ToBase64String([IO.File]::ReadAllBytes('{path}'))"
+    escaped = path.replace("'", "'\\''")
+    return f"base64 < '{escaped}'"
+
+def build_write_file(path: str, is_windows: bool) -> str:
+    if is_windows:
+        return f"$b=[Convert]::FromBase64String([Console]::In.ReadToEnd());[IO.File]::WriteAllBytes('{path}',$b)"
+    escaped = path.replace("'", "'\\''")
+    return f"base64 -d > '{escaped}'"
+
 async def handler(websocket):
     proc = None
     try:
@@ -165,6 +191,10 @@ async def handler(websocket):
 
         await websocket.send(json.dumps({"type": "connected", "host": SSH_TARGET, "port": SSH_PORT}))
 
+        # Probe remote OS — uname exists on POSIX, fails on plain Windows
+        _, _, probe_code = await _ssh("uname 2>&1")
+        IS_WINDOWS = probe_code != 0
+
         # Spawn native ssh client as subprocess for the PTY shell
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "ControlPath=" + SOCKET_PATH, "-t", SSH_TARGET,
@@ -196,9 +226,7 @@ async def handler(websocket):
                         pass
                     elif t == "list_dir":
                         path = msg["path"]
-                        escaped = path.replace("'", "'\\''")
-                        sh_cmd = f"cd '{escaped}' 2>/dev/null || cd ~ 2>/dev/null; for e in * .*; do [ \"$e\" = \".\" ] && continue; [ \"$e\" = \"..\" ] && continue; if [ -L \"$e\" ]; then t=l; s=0; elif [ -d \"$e\" ]; then t=d; s=0; else s=$(wc -c < \"$e\" 2>/dev/null || echo 0); t=f; fi; printf '%s\\t%s\\t%s\\n' \"$t\" \"$s\" \"$e\"; done"
-                        stdout, stderr, code = await _ssh(sh_cmd)
+                        stdout, stderr, code = await _ssh(build_list_dir(path, IS_WINDOWS))
                         if code == 0:
                             entries = []
                             for line in stdout.strip().split('\n'):
@@ -227,9 +255,7 @@ async def handler(websocket):
                             }))
                     elif t == "read_file":
                         path = msg["path"]
-                        escaped = path.replace("'", "'\\''")
-                        sh_cmd = f"base64 < '{escaped}' 2>/dev/null || python3 -c \"import sys,base64; print(base64.b64encode(open(sys.argv[1],'rb').read()).decode())\" '{escaped}' 2>/dev/null || python -c \"import sys,base64; print(base64.b64encode(open(sys.argv[1],'rb').read()).decode())\" '{escaped}'"
-                        stdout, stderr, code = await _ssh(sh_cmd)
+                        stdout, stderr, code = await _ssh(build_read_file(path, IS_WINDOWS))
                         output = stdout.strip()
                         if code == 0 and output:
                             await websocket.send(json.dumps({
@@ -249,9 +275,7 @@ async def handler(websocket):
                         path = msg["path"]
                         content = msg["content"]
                         content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
-                        escaped = path.replace("'", "'\\''")
-                        sh_cmd = f"base64 -d > '{escaped}' 2>/dev/null || python3 -c \"import sys,base64; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))\" > '{escaped}' 2>/dev/null || python -c \"import sys,base64; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))\" > '{escaped}'"
-                        stdout, stderr, code = await _ssh(sh_cmd, input_data=content_b64.encode())
+                        stdout, stderr, code = await _ssh(build_write_file(path, IS_WINDOWS), input_data=content_b64.encode())
                         if code == 0:
                             await websocket.send(json.dumps({
                                 "type": "write_file_result",
