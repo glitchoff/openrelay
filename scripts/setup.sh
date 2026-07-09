@@ -131,7 +131,7 @@ async def _ssh(cmd: str, input_data: bytes | None = None, timeout: int = 30) -> 
 def _ps_cmd(cmd: str) -> str:
     """Wrap a PowerShell command to run via cmd.exe safely (base64 avoids quoting hell)."""
     encoded = base64.b64encode(cmd.encode("utf-16le")).decode("ascii")
-    return f"powershell -NoProfile -EncodedCommand {encoded}"
+    return f"powershell -NoProfile -OutputFormat Text -EncodedCommand {encoded}"
 
 def _posix_path(path: str) -> str:
     """Replace leading ~ with $HOME so bash expands inside double quotes."""
