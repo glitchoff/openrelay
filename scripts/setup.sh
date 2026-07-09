@@ -1,12 +1,26 @@
 #!/data/data/com.termux/files/usr/bin/bash
+
 #
-# OpenRelay Setup — run this in Termux to install & start the bridge
+# OpenRelay Setup — AsyncSSH Edition
 #
-# Usage: bash <(curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh)
-# Or:    curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh -o setup.sh && bash setup.sh
+# Usage:
+#   bash setup.sh
+#
+# Or:
+#   bash <(curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh)
+#
+# Behavior:
+#   - Uses AsyncSSH instead of native ssh subprocesses.
+#   - Uses a real SSH PTY.
+#   - Supports terminal resize.
+#   - Uses SFTP for file operations.
+#   - Never stores SSH passwords.
+#   - Runs directly in the Termux foreground.
+#   - Shows live logs.
+#   - Ctrl+C shuts everything down.
 #
 
-set -e
+set -Eeuo pipefail
 
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -16,440 +30,1641 @@ BLUE='\033[1;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-VERSION="1.2.1"
+VERSION="3.0.0"
+
 BRIDGE_DIR="$HOME/.openrelay"
 CONFIG_FILE="$BRIDGE_DIR/config.sh"
+BRIDGE_FILE="$BRIDGE_DIR/bridge.py"
 
 echo -e "${YELLOW}"
 echo "   ____                   ____      __             "
-echo "  / __ \____  ___  ____  / __ \___ / /___ ___  __  "
-echo " / / / / __ \/ _ \/ __ \/ /_/ / _ \/ / __ \`/ / / /  "
-echo "/ /_/ / /_/ /  __/ / / / _, _/  __/ / /_/ /_/ / /   "
-echo "\____/ .___/\___/_/ /_/_/ |_|\___/_/_/\__,_/\__, /    "
+echo "  / __ \____  ___  ____  / __ \___ / /___ ___  __ "
+echo " / / / / __ \/ _ \/ __ \/ /_/ / _ \/ / __ \`/ / / /"
+echo "/ /_/ / /_/ /  __/ / / / _, _/  __/ / /_/ /_/ / / "
+echo "\____/ .___/\___/_/ /_/_/ |_|\___/_/_/\__,_/\__, /  "
 echo "    /_/                                    /____/    "
 echo -e "${NC}"
+
 echo -e "${BOLD}  🔥 OpenRelay Bridge Setup v${VERSION}${NC}"
 echo -e "${DIM}  ──────────────────────────────────────────${NC}"
 echo ""
 
-# --- Always read from terminal, even when piped ---
+# Always accept input from the actual Termux terminal,
+# even when setup.sh is piped through curl.
 exec < /dev/tty
 
-# --- Load previous configuration if exists ---
+mkdir -p "$BRIDGE_DIR"
+
+
+# ================================================================
+# Previous configuration
+# ================================================================
+
 PREV_TARGET=""
 PREV_PORT="22"
-PREV_PASSWORD=""
+
 if [ -f "$CONFIG_FILE" ]; then
-    PREV_TARGET=$(grep "export OPENRELAY_SSH_TARGET=" "$CONFIG_FILE" | cut -d'"' -f2)
-    PREV_PORT=$(grep "export OPENRELAY_SSH_PORT=" "$CONFIG_FILE" | cut -d'"' -f2)
-    PREV_PASSWORD=$(grep "export SSHPASS=" "$CONFIG_FILE" | cut -d'"' -f2)
+
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+
+    PREV_TARGET="${OPENRELAY_SSH_TARGET:-}"
+    PREV_PORT="${OPENRELAY_SSH_PORT:-22}"
 fi
+
 
 TARGET=""
 PORT=""
-PASSWORD=""
+
 
 if [ -n "$PREV_TARGET" ]; then
+
     echo -e "${YELLOW}Found previous configuration:${NC}"
-    echo -e "  SSH Target: ${BLUE}$PREV_TARGET${NC}"
-    echo -e "  SSH Port:   ${BLUE}$PREV_PORT${NC}"
+
+    echo -e "  SSH Target: ${BLUE}${PREV_TARGET}${NC}"
+    echo -e "  SSH Port:   ${BLUE}${PREV_PORT}${NC}"
+
     echo ""
-    read -p "$(echo -e "${BLUE}?${NC} Use this configuration? (y/n) [y]: ")" USE_PREV
-    USE_PREV=${USE_PREV:-y}
-    if [ "$USE_PREV" = "y" ] || [ "$USE_PREV" = "Y" ]; then
+
+    read -r -p "$(echo -e "${BLUE}?${NC} Use this configuration? (Y/n): ")" USE_PREV
+
+    USE_PREV="${USE_PREV:-y}"
+
+    if [[ "$USE_PREV" =~ ^[Yy]$ ]]; then
         TARGET="$PREV_TARGET"
         PORT="$PREV_PORT"
-        PASSWORD="$PREV_PASSWORD"
     fi
+
     echo ""
 fi
 
-# --- Get SSH target normally if not using previous ---
+
+# ================================================================
+# Ask for SSH target
+# ================================================================
+
 if [ -z "$TARGET" ]; then
-    read -p "$(echo -e "${BLUE}?${NC} SSH target ${DIM}(user@host)${NC}: ")" TARGET
-    read -sp "$(echo -e "${BLUE}?${NC} SSH password ${DIM}(or blank for key auth)${NC}: ")" PASSWORD
-    echo ""
-    read -p "$(echo -e "${BLUE}?${NC} SSH port ${DIM}[22]${NC}: ")" PORT
-    PORT=${PORT:-22}
+
+    while [ -z "$TARGET" ]; do
+
+        read -r -p "$(echo -e "${BLUE}?${NC} SSH target ${DIM}(user@host)${NC}: ")" TARGET
+
+    done
+
+    read -r -p "$(echo -e "${BLUE}?${NC} SSH port ${DIM}[22]${NC}: ")" PORT
+
+    PORT="${PORT:-22}"
 fi
+
+
+# ================================================================
+# Validate SSH target
+# ================================================================
+
+if [[ "$TARGET" != *@* ]]; then
+
+    echo -e "${RED}SSH target must use user@host format.${NC}"
+
+    exit 1
+fi
+
+
+SSH_USERNAME="${TARGET%@*}"
+SSH_HOST="${TARGET#*@}"
+
+
+if [ -z "$SSH_USERNAME" ] || [ -z "$SSH_HOST" ]; then
+
+    echo -e "${RED}Invalid SSH target: ${TARGET}${NC}"
+
+    exit 1
+fi
+
+
+# ================================================================
+# Validate port
+# ================================================================
+
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
+
+    echo -e "${RED}Invalid SSH port: ${PORT}${NC}"
+
+    exit 1
+fi
+
+
+# ================================================================
+# Ask for password
+# ================================================================
 
 echo ""
-echo -e "${YELLOW}▶ Installing dependencies...${NC}"
+
+read -r -s -p "$(echo -e "${BLUE}?${NC} SSH password ${DIM}(blank for key authentication)${NC}: ")" PASSWORD
+
+echo ""
+echo ""
+
+
+# ================================================================
+# Install dependencies
+# ================================================================
+
+echo -e "${YELLOW}▶ Installing Termux dependencies...${NC}"
+echo ""
 
 pkg update -y -q
-pkg install -y python openssh sshpass lsof python-cryptography
 
-echo -e "${YELLOW}▶ Installing Python websockets...${NC}"
-pip install websockets
+pkg install -y \
+    python \
+    openssh
 
-# --- Create bridge directory ---
-BRIDGE_DIR="$HOME/.openrelay"
-mkdir -p "$BRIDGE_DIR"
-mkdir -p "$BRIDGE_DIR/sockets"
 
-# --- Write the bridge script ---
-cat > "$BRIDGE_DIR/bridge.py" << 'PYEOF'
-#!/data/data/com.termux/files/usr/bin/env python3
-import asyncio
-import json
-import os
-import sys
-import subprocess
-import base64
+echo ""
+echo -e "${YELLOW}▶ Installing Python dependencies...${NC}"
+echo ""
 
-WEBSOCKET_PORT = int(os.environ.get("OPENRELAY_PORT", "8080"))
-SSH_TARGET = os.environ.get("OPENRELAY_SSH_TARGET", "")
-SSH_PORT = int(os.environ.get("OPENRELAY_SSH_PORT", "22"))
-SSHPASS = os.environ.get("SSHPASS", "")
+python -m pip install --upgrade \
+    websockets \
+    asyncssh
 
-SOCKET_DIR = os.path.expanduser("~/.openrelay/sockets")
-os.makedirs(SOCKET_DIR, exist_ok=True)
-SOCKET_PATH = os.path.join(SOCKET_DIR, "ssh_mux")
 
-async def _ssh(cmd: str, input_data: bytes | None = None, timeout: int = 30) -> tuple[str, str, int]:
-    """Run a command on the remote host via the SSH ControlMaster connection."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ssh", "-o", "ControlPath=" + SOCKET_PATH, "-o", "ConnectTimeout=10",
-            SSH_TARGET, cmd,
-            stdin=asyncio.subprocess.PIPE if input_data is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input_data), timeout=timeout
-        )
-        return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"), proc.returncode
-    except asyncio.TimeoutError:
-        try: proc.kill()
-        except: pass
-        return "", "Command timed out", -1
-    except Exception as e:
-        return "", str(e), -1
+# ================================================================
+# Save safe configuration
+#
+# Password is NEVER written to disk.
+# ================================================================
 
-# ── Command builders (POSIX vs PowerShell) ──────────────────────
-def _ps_cmd(cmd: str) -> str:
-    """Wrap a PowerShell command to run via cmd.exe safely (base64 avoids quoting hell)."""
-    encoded = base64.b64encode(cmd.encode("utf-16le")).decode("ascii")
-    return f"powershell -NoProfile -OutputFormat Text -EncodedCommand {encoded}"
-
-def _posix_path(path: str) -> str:
-    """Replace leading ~ with $HOME so bash expands inside double quotes."""
-    if path.startswith('~/'):
-        return '$HOME/' + path[2:]
-    if path == '~':
-        return '$HOME'
-    return path
-
-def _ps_path(path: str) -> str:
-    """Escape and wrap for PowerShell, with inline ~→$env:USERPROFILE and /→\\."""
-    escaped = path.replace("'", "''").replace("/", "\\")
-    return f"$p='{escaped}';if($p[0]-eq'~'){{$p=$env:USERPROFILE+$p.Substring(1)}};$p=$p -replace '/','\\'"
-
-def build_list_dir(path: str, is_windows: bool) -> str:
-    if is_windows:
-        prefix = _ps_path(path)
-        cmd = (f"{prefix};Get-ChildItem -Path $p -Force | "
-               f"ForEach-Object {{ \"$(if($_.PSIsContainer){{'d'}}else{{'f'}})`t$($_.Length)`t$($_.Name)\" }}")
-        return _ps_cmd(cmd)
-    p = _posix_path(path)
-    return (f"cd \"{p}\" 2>/dev/null; "
-            f"for e in * .*; do "
-            f"[ \"$e\" = \".\" -o \"$e\" = \"..\" ] && continue; "
-            f"if [ -L \"$e\" ]; then t=l; s=0; "
-            f"elif [ -d \"$e\" ]; then t=d; s=0; "
-            f"else s=$(wc -c < \"$e\" 2>/dev/null||echo 0); t=f; fi; "
-            f"printf '%s\\t%s\\t%s\\n' \"$t\" \"$s\" \"$e\"; done")
-
-def build_read_file(path: str, is_windows: bool) -> str:
-    if is_windows:
-        prefix = _ps_path(path)
-        return _ps_cmd(f"{prefix};[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))")
-    p = _posix_path(path)
-    return f"base64 < \"{p}\""
-
-def build_write_file(path: str, is_windows: bool) -> str:
-    if is_windows:
-        prefix = _ps_path(path)
-        return _ps_cmd(f"{prefix};[Convert]::FromBase64String([Console]::In.ReadToEnd())|ForEach-Object{{[IO.File]::WriteAllBytes($p,$_)}}")
-    p = _posix_path(path)
-    return f"base64 -d > \"{p}\""
-
-async def handler(websocket):
-    proc = None
-    try:
-        raw = await websocket.recv()
-        msg = json.loads(raw)
-        if msg.get("type") != "connect":
-            await websocket.send(json.dumps({"type": "error", "message": "First message must be connect"}))
-            return
-
-        # Always delete old socket to force fresh auth
-        if os.path.exists(SOCKET_PATH):
-            try: os.remove(SOCKET_PATH)
-            except: pass
-
-        await websocket.send(json.dumps({"type": "connecting", "host": SSH_TARGET, "port": SSH_PORT}))
-
-        password = msg.get("password", SSHPASS)
-        tmpfile = None
-        cmd = []
-        if password:
-            tmpfile = os.path.join(SOCKET_DIR, f"sshpass_{os.getpid()}")
-            with open(tmpfile, "w") as f:
-                f.write(password)
-            os.chmod(tmpfile, 0o600)
-            cmd += ["sshpass", "-f", tmpfile]
-
-        cmd += [
-            "ssh", "-M", "-S", SOCKET_PATH, 
-            "-p", str(SSH_PORT), 
-            "-N", "-f", 
-            "-o", "ControlPersist=10m", 
-            "-o", "StrictHostKeyChecking=no", 
-            SSH_TARGET
-        ]
-
-        p = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await p.communicate()
-
-        # Clean up temp password file
-        if tmpfile and os.path.exists(tmpfile):
-            try: os.remove(tmpfile)
-            except: pass
-
-        if p.returncode != 0:
-            err = stderr.decode("utf-8")
-            # Remove stale socket so retry works
-            if os.path.exists(SOCKET_PATH):
-                try: os.remove(SOCKET_PATH)
-                except: pass
-            await websocket.send(json.dumps({"type": "error", "message": f"SSH connection failed: {err}"}))
-            return
-
-        await websocket.send(json.dumps({"type": "connected", "host": SSH_TARGET, "port": SSH_PORT}))
-
-        # Probe remote OS — uname exists on POSIX, fails on plain Windows
-        _, _, probe_code = await _ssh("uname 2>&1")
-        IS_WINDOWS = probe_code != 0
-
-        # Spawn native ssh client as subprocess for the PTY shell
-        proc = await asyncio.create_subprocess_exec(
-            "ssh", "-o", "ControlPath=" + SOCKET_PATH, "-t", SSH_TARGET,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-
-        async def read_pty():
-            while True:
-                try:
-                    data = await proc.stdout.read(4096)
-                    if not data: break
-                    text = data.decode("utf-8", errors="replace")
-                    await websocket.send(json.dumps({"type": "stdout", "data": text}))
-                except Exception: break
-
-        async def write_pty():
-            try:
-                async for message in websocket:
-                    msg = json.loads(message)
-                    t = msg.get("type")
-                    req_id = msg.get("id", "")
-
-                    if t == "stdin":
-                        proc.stdin.write(msg["data"].encode("utf-8"))
-                        await proc.stdin.drain()
-                    elif t == "resize":
-                        pass
-                    elif t == "list_dir":
-                        path = msg["path"]
-                        stdout, stderr, code = await _ssh(build_list_dir(path, IS_WINDOWS))
-                        if code == 0:
-                            entries = []
-                            for line in stdout.strip().split('\n'):
-                                if not line: continue
-                                parts = line.split('\t', 2)
-                                if len(parts) < 3: continue
-                                t, s, name = parts
-                                entries.append({
-                                    "name": name,
-                                    "is_dir": t == 'd',
-                                    "is_symlink": t == 'l',
-                                    "size": int(s) if s.isdigit() else 0
-                                })
-                            await websocket.send(json.dumps({
-                                "type": "list_dir_result",
-                                "path": path,
-                                "id": req_id,
-                                "entries": entries
-                            }))
-                        else:
-                            await websocket.send(json.dumps({
-                                "type": "error",
-                                "path": path,
-                                "id": req_id,
-                                "message": f"Failed to list directory: {stderr or stdout}"
-                            }))
-                    elif t == "read_file":
-                        path = msg["path"]
-                        stdout, stderr, code = await _ssh(build_read_file(path, IS_WINDOWS))
-                        output = stdout.strip()
-                        if code == 0 and output:
-                            await websocket.send(json.dumps({
-                                "type": "read_file_result",
-                                "path": path,
-                                "id": req_id,
-                                "content_b64": output
-                            }))
-                        else:
-                            await websocket.send(json.dumps({
-                                "type": "error",
-                                "path": path,
-                                "id": req_id,
-                                "message": f"Failed to read file: {stderr or 'Empty output'}"
-                            }))
-                    elif t == "write_file":
-                        path = msg["path"]
-                        content = msg["content"]
-                        content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
-                        stdout, stderr, code = await _ssh(build_write_file(path, IS_WINDOWS), input_data=content_b64.encode())
-                        if code == 0:
-                            await websocket.send(json.dumps({
-                                "type": "write_file_result",
-                                "path": path,
-                                "id": req_id,
-                                "success": True
-                            }))
-                        else:
-                            await websocket.send(json.dumps({
-                                "type": "error",
-                                "path": path,
-                                "id": req_id,
-                                "message": f"Failed to write file: {stderr or stdout}"
-                            }))
-                    elif t == "disconnect": 
-                        break
-            except Exception: 
-                pass
-
-        await asyncio.gather(read_pty(), write_pty())
-    except Exception as e:
-        try: await websocket.send(json.dumps({"type": "error", "message": str(e)}))
-        except: pass
-    finally:
-        # Clean up socket on disconnect
-        if os.path.exists(SOCKET_PATH):
-            try: subprocess.run(["ssh", "-O", "exit", "-S", SOCKET_PATH, SSH_TARGET], capture_output=True)
-            except: pass
-        if proc:
-            try: proc.kill()
-            except: pass
-
-async def main():
-    try:
-        import websockets
-    except ImportError:
-        print("[*] Installing requirements...", flush=True)
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets"])
-        import websockets
-    print()
-    print("  \033[1m\033[38;5;208m🔥 OpenRelay Bridge (Native OpenSSH ControlMaster)\033[0m")
-    print("  \033[2m────────────────────────────────────────────────────\033[0m")
-    print(f"  WebSocket: ws://127.0.0.1:{WEBSOCKET_PORT}")
-    if SSH_TARGET:
-        print(f"  SSH:       {SSH_TARGET} ({'password' if SSHPASS else 'key'})")
-    else:
-        print("  SSH:       <send target via PWA>")
-    print()
-    async with websockets.serve(handler, "127.0.0.1", WEBSOCKET_PORT):
-        await asyncio.Future()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-PYEOF
-
-chmod +x "$BRIDGE_DIR/bridge.py"
-
-# --- Write config ---
-cat > "$BRIDGE_DIR/config.sh" << EOF
+cat > "$CONFIG_FILE" <<EOF
 export OPENRELAY_PORT="8080"
-export OPENRELAY_SSH_TARGET="$TARGET"
-export OPENRELAY_SSH_PORT="$PORT"
-export SSHPASS="$PASSWORD"
+export OPENRELAY_SSH_TARGET=$(printf '%q' "$TARGET")
+export OPENRELAY_SSH_PORT=$(printf '%q' "$PORT")
 EOF
 
-# --- Start bridge ---
+chmod 600 "$CONFIG_FILE"
+
+
+# ================================================================
+# Write bridge.py
+# ================================================================
+
+cat > "$BRIDGE_FILE" <<'PYEOF'
+#!/data/data/com.termux/files/usr/bin/env python3
+
+import asyncio
+import base64
+import contextlib
+import json
+import os
+import secrets
+import signal
+import sys
+
+import asyncssh
+import websockets
+
+
+# ================================================================
+# Configuration
+# ================================================================
+
+WEBSOCKET_HOST = "127.0.0.1"
+
+WEBSOCKET_PORT = int(
+    os.environ.get(
+        "OPENRELAY_PORT",
+        "8080",
+    )
+)
+
+SSH_TARGET = os.environ.get(
+    "OPENRELAY_SSH_TARGET",
+    "",
+)
+
+SSH_PORT = int(
+    os.environ.get(
+        "OPENRELAY_SSH_PORT",
+        "22",
+    )
+)
+
+SSH_PASSWORD = os.environ.get(
+    "OPENRELAY_SSH_PASSWORD",
+    "",
+)
+
+
+if "@" not in SSH_TARGET:
+
+    print(
+        "\033[31m"
+        "[OpenRelay] Invalid SSH target. "
+        "Expected user@host."
+        "\033[0m",
+        flush=True,
+    )
+
+    raise SystemExit(1)
+
+
+SSH_USERNAME, SSH_HOST = SSH_TARGET.split("@", 1)
+
+
+# ================================================================
+# Logging
+# ================================================================
+
+def log(message):
+
+    print(
+        f"\033[2m[OpenRelay]\033[0m {message}",
+        flush=True,
+    )
+
+
+def log_success(message):
+
+    print(
+        f"\033[32m[OpenRelay]\033[0m {message}",
+        flush=True,
+    )
+
+
+def log_error(message):
+
+    print(
+        f"\033[31m[OpenRelay]\033[0m {message}",
+        flush=True,
+    )
+
+
+# ================================================================
+# Active connections
+# ================================================================
+
+ACTIVE_CONNECTIONS = set()
+
+
+# ================================================================
+# OpenRelay SSH connection
+# ================================================================
+
+class OpenRelayConnection:
+
+    def __init__(self, websocket):
+
+        self.websocket = websocket
+
+        self.connection_id = secrets.token_hex(4)
+
+        self.ssh = None
+
+        self.shell = None
+
+        self.sftp = None
+
+        self.closed = False
+
+        self.send_lock = asyncio.Lock()
+
+
+    # ============================================================
+    # WebSocket send
+    # ============================================================
+
+    async def send(self, payload):
+
+        async with self.send_lock:
+
+            await self.websocket.send(
+                json.dumps(payload)
+            )
+
+
+    # ============================================================
+    # Connect SSH
+    # ============================================================
+
+    async def connect(self):
+
+        log(
+            f"{self.connection_id}: "
+            f"connecting to "
+            f"{SSH_USERNAME}@{SSH_HOST}:{SSH_PORT}"
+        )
+
+
+        await self.send({
+
+            "type": "connecting",
+
+            "host": SSH_TARGET,
+
+            "port": SSH_PORT,
+
+        })
+
+
+        connect_options = {
+
+            "host": SSH_HOST,
+
+            "port": SSH_PORT,
+
+            "username": SSH_USERNAME,
+
+            "known_hosts": None,
+
+            "connect_timeout": 15,
+
+            "keepalive_interval": 30,
+
+            "keepalive_count_max": 3,
+
+        }
+
+
+        if SSH_PASSWORD:
+
+            connect_options["password"] = SSH_PASSWORD
+
+
+        self.ssh = await asyncssh.connect(
+            **connect_options
+        )
+
+
+        log_success(
+            f"{self.connection_id}: SSH connected"
+        )
+
+
+        await self.send({
+
+            "type": "connected",
+
+            "host": SSH_TARGET,
+
+            "port": SSH_PORT,
+
+        })
+
+
+    # ============================================================
+    # Start SFTP
+    # ============================================================
+
+    async def start_sftp(self):
+
+        self.sftp = await self.ssh.start_sftp_client()
+
+
+        log(
+            f"{self.connection_id}: "
+            "SFTP started"
+        )
+
+
+    # ============================================================
+    # Start interactive PTY shell
+    # ============================================================
+
+    async def start_shell(
+        self,
+        cols=80,
+        rows=24,
+    ):
+
+        self.shell = await self.ssh.create_process(
+
+            term_type="xterm-256color",
+
+            term_size=(
+                cols,
+                rows,
+            ),
+
+            encoding=None,
+
+        )
+
+
+        log(
+            f"{self.connection_id}: "
+            f"PTY shell started ({cols}x{rows})"
+        )
+
+
+    # ============================================================
+    # Read PTY output
+    # ============================================================
+
+    async def read_shell(self):
+
+        try:
+
+            while True:
+
+                data = await self.shell.stdout.read(
+                    8192
+                )
+
+
+                if not data:
+                    break
+
+
+                # AsyncSSH is using encoding=None.
+                #
+                # This means stdout is raw bytes.
+                #
+                # Decode only for JSON/WebSocket transport.
+                #
+                # ANSI escape sequences remain intact and xterm.js
+                # can interpret them normally.
+
+                text = data.decode(
+                    "utf-8",
+                    errors="replace",
+                )
+
+
+                await self.send({
+
+                    "type": "stdout",
+
+                    "data": text,
+
+                })
+
+
+        except asyncio.CancelledError:
+
+            raise
+
+
+        except Exception as error:
+
+            log_error(
+                f"{self.connection_id}: "
+                f"PTY reader failed: {error}"
+            )
+
+
+    # ============================================================
+    # Write PTY input
+    # ============================================================
+
+    async def write_stdin(self, data):
+
+        if not self.shell:
+            return
+
+
+        if not isinstance(data, str):
+            return
+
+
+        self.shell.stdin.write(
+            data.encode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+
+        await self.shell.stdin.drain()
+
+
+    # ============================================================
+    # Resize PTY
+    # ============================================================
+
+    def resize(self, cols, rows):
+
+        if not self.shell:
+            return
+
+
+        try:
+
+            cols = int(cols)
+            rows = int(rows)
+
+
+            if cols < 1 or rows < 1:
+                return
+
+
+            if cols > 1000 or rows > 1000:
+                return
+
+
+            self.shell.change_terminal_size(
+                cols,
+                rows,
+            )
+
+
+            log(
+                f"{self.connection_id}: "
+                f"PTY resized to {cols}x{rows}"
+            )
+
+
+        except (TypeError, ValueError):
+
+            pass
+
+
+    # ============================================================
+    # Resolve SFTP path
+    # ============================================================
+
+    async def resolve_path(self, path):
+
+        if not isinstance(path, str):
+
+            raise ValueError(
+                "Invalid path"
+            )
+
+
+        if path == "~":
+
+            return await self.sftp.realpath(".")
+
+
+        # Bare drive letter ("D:") → root ("D:/")
+        if len(path) == 2 and path[1] == ':':
+            path += '/'
+
+        if path.startswith("~/"):
+
+            home = await self.sftp.realpath(".")
+
+            return (
+                home.rstrip("/")
+                + "/"
+                + path[2:]
+            )
+
+
+        return path
+
+
+    # ============================================================
+    # List directory
+    # ============================================================
+
+    async def list_directory(
+        self,
+        path,
+    ):
+
+        path = await self.resolve_path(path)
+
+        names = await self.sftp.listdir(path)
+
+        entries = []
+
+
+        for name in names:
+
+            try:
+
+                full_path = (
+                    path.rstrip("/")
+                    + "/"
+                    + name
+                )
+
+
+                attrs = await self.sftp.lstat(
+                    full_path
+                )
+
+
+                permissions = attrs.permissions or 0
+
+
+                is_dir = (
+                    permissions & 0o170000
+                ) == 0o040000
+
+
+                is_symlink = (
+                    permissions & 0o170000
+                ) == 0o120000
+
+
+                entries.append({
+
+                    "name": name,
+
+                    "is_dir": is_dir,
+
+                    "is_symlink": is_symlink,
+
+                    "size": attrs.size or 0,
+
+                })
+
+
+            except Exception as error:
+
+                log_error(
+                    f"{self.connection_id}: "
+                    f"unable to stat {name}: {error}"
+                )
+
+
+        return entries
+
+
+    # ============================================================
+    # Read file
+    # ============================================================
+
+    async def read_file(
+        self,
+        path,
+    ):
+
+        path = await self.resolve_path(path)
+
+
+        async with self.sftp.open(
+            path,
+            "rb",
+        ) as file:
+
+            return await file.read()
+
+
+    # ============================================================
+    # Write file
+    # ============================================================
+
+    async def write_file(
+        self,
+        path,
+        content,
+    ):
+
+        path = await self.resolve_path(path)
+
+
+        async with self.sftp.open(
+            path,
+            "wb",
+        ) as file:
+
+            await file.write(content)
+
+
+    # ============================================================
+    # Close connection
+    # ============================================================
+
+    async def close(self):
+
+        if self.closed:
+            return
+
+
+        self.closed = True
+
+
+        log(
+            f"{self.connection_id}: "
+            "closing connection"
+        )
+
+
+        # --------------------------------------------------------
+        # Close shell
+        # --------------------------------------------------------
+
+        if self.shell:
+
+            with contextlib.suppress(Exception):
+
+                self.shell.stdin.write_eof()
+
+
+            with contextlib.suppress(Exception):
+
+                self.shell.close()
+
+
+            with contextlib.suppress(Exception):
+
+                await asyncio.wait_for(
+                    self.shell.wait_closed(),
+                    timeout=3,
+                )
+
+
+            self.shell = None
+
+
+        # --------------------------------------------------------
+        # Close SFTP
+        # --------------------------------------------------------
+
+        if self.sftp:
+
+            with contextlib.suppress(Exception):
+
+                self.sftp.exit()
+
+
+            with contextlib.suppress(Exception):
+
+                await asyncio.wait_for(
+                    self.sftp.wait_closed(),
+                    timeout=3,
+                )
+
+
+            self.sftp = None
+
+
+        # --------------------------------------------------------
+        # Close SSH
+        # --------------------------------------------------------
+
+        if self.ssh:
+
+            self.ssh.close()
+
+
+            with contextlib.suppress(Exception):
+
+                await asyncio.wait_for(
+                    self.ssh.wait_closed(),
+                    timeout=5,
+                )
+
+
+            self.ssh = None
+
+
+        log(
+            f"{self.connection_id}: "
+            "connection closed"
+        )
+
+
+# ================================================================
+# Handle list directory
+# ================================================================
+
+async def handle_list_directory(
+    connection,
+    message,
+):
+
+    request_id = message.get(
+        "id",
+        "",
+    )
+
+    path = message.get(
+        "path"
+    )
+
+
+    try:
+
+        entries = await connection.list_directory(
+            path
+        )
+
+
+        await connection.send({
+
+            "type": "list_dir_result",
+
+            "path": path,
+
+            "id": request_id,
+
+            "entries": entries,
+
+        })
+
+
+    except Exception as error:
+
+        await connection.send({
+
+            "type": "error",
+
+            "path": path,
+
+            "id": request_id,
+
+            "message": (
+                f"Failed to list directory: "
+                f"{error}"
+            ),
+
+        })
+
+
+# ================================================================
+# Handle read file
+# ================================================================
+
+async def handle_read_file(
+    connection,
+    message,
+):
+
+    request_id = message.get(
+        "id",
+        "",
+    )
+
+    path = message.get(
+        "path"
+    )
+
+
+    try:
+
+        content = await connection.read_file(
+            path
+        )
+
+
+        content_b64 = base64.b64encode(
+            content
+        ).decode("ascii")
+
+
+        await connection.send({
+
+            "type": "read_file_result",
+
+            "path": path,
+
+            "id": request_id,
+
+            "content_b64": content_b64,
+
+        })
+
+
+    except Exception as error:
+
+        await connection.send({
+
+            "type": "error",
+
+            "path": path,
+
+            "id": request_id,
+
+            "message": (
+                f"Failed to read file: "
+                f"{error}"
+            ),
+
+        })
+
+
+# ================================================================
+# Handle write file
+# ================================================================
+
+async def handle_write_file(
+    connection,
+    message,
+):
+
+    request_id = message.get(
+        "id",
+        "",
+    )
+
+    path = message.get(
+        "path"
+    )
+
+
+    try:
+
+        # New binary-safe protocol.
+
+        if isinstance(
+            message.get("content_b64"),
+            str,
+        ):
+
+            content = base64.b64decode(
+                message["content_b64"],
+                validate=True,
+            )
+
+
+        # Compatibility with current frontend.
+
+        elif isinstance(
+            message.get("content"),
+            str,
+        ):
+
+            content = message[
+                "content"
+            ].encode("utf-8")
+
+
+        else:
+
+            raise ValueError(
+                "Missing file content"
+            )
+
+
+        await connection.write_file(
+            path,
+            content,
+        )
+
+
+        await connection.send({
+
+            "type": "write_file_result",
+
+            "path": path,
+
+            "id": request_id,
+
+            "success": True,
+
+        })
+
+
+    except Exception as error:
+
+        await connection.send({
+
+            "type": "error",
+
+            "path": path,
+
+            "id": request_id,
+
+            "message": (
+                f"Failed to write file: "
+                f"{error}"
+            ),
+
+        })
+
+
+# ================================================================
+# WebSocket reader
+# ================================================================
+
+async def websocket_reader(
+    connection,
+):
+
+    async for raw_message in connection.websocket:
+
+        try:
+
+            message = json.loads(
+                raw_message
+            )
+
+
+        except json.JSONDecodeError:
+
+            await connection.send({
+
+                "type": "error",
+
+                "message": "Invalid JSON message",
+
+            })
+
+            continue
+
+
+        message_type = message.get(
+            "type"
+        )
+
+
+        # --------------------------------------------------------
+        # STDIN
+        # --------------------------------------------------------
+
+        if message_type == "stdin":
+
+            await connection.write_stdin(
+
+                message.get(
+                    "data",
+                    "",
+                )
+
+            )
+
+
+        # --------------------------------------------------------
+        # Resize
+        # --------------------------------------------------------
+
+        elif message_type == "resize":
+
+            connection.resize(
+
+                message.get(
+                    "cols",
+                    80,
+                ),
+
+                message.get(
+                    "rows",
+                    24,
+                ),
+
+            )
+
+
+        # --------------------------------------------------------
+        # List directory
+        # --------------------------------------------------------
+
+        elif message_type == "list_dir":
+
+            await handle_list_directory(
+                connection,
+                message,
+            )
+
+
+        # --------------------------------------------------------
+        # Read file
+        # --------------------------------------------------------
+
+        elif message_type == "read_file":
+
+            await handle_read_file(
+                connection,
+                message,
+            )
+
+
+        # --------------------------------------------------------
+        # Write file
+        # --------------------------------------------------------
+
+        elif message_type == "write_file":
+
+            await handle_write_file(
+                connection,
+                message,
+            )
+
+
+        # --------------------------------------------------------
+        # Disconnect
+        # --------------------------------------------------------
+
+        elif message_type == "disconnect":
+
+            break
+
+
+        # --------------------------------------------------------
+        # Unknown
+        # --------------------------------------------------------
+
+        else:
+
+            await connection.send({
+
+                "type": "error",
+
+                "id": message.get(
+                    "id",
+                    "",
+                ),
+
+                "message": (
+                    f"Unknown message type: "
+                    f"{message_type}"
+                ),
+
+            })
+
+
+# ================================================================
+# WebSocket handler
+# ================================================================
+
+async def handler(websocket):
+
+    connection = None
+
+
+    try:
+
+        # --------------------------------------------------------
+        # Wait for connect message
+        # --------------------------------------------------------
+
+        raw_message = await asyncio.wait_for(
+
+            websocket.recv(),
+
+            timeout=30,
+
+        )
+
+
+        try:
+
+            message = json.loads(
+                raw_message
+            )
+
+
+        except json.JSONDecodeError:
+
+            await websocket.send(
+
+                json.dumps({
+
+                    "type": "error",
+
+                    "message": "Invalid JSON message",
+
+                })
+
+            )
+
+            return
+
+
+        if message.get("type") != "connect":
+
+            await websocket.send(
+
+                json.dumps({
+
+                    "type": "error",
+
+                    "message": (
+                        "First message must be connect"
+                    ),
+
+                })
+
+            )
+
+            return
+
+
+        # --------------------------------------------------------
+        # Create connection
+        # --------------------------------------------------------
+
+        connection = OpenRelayConnection(
+            websocket
+        )
+
+
+        ACTIVE_CONNECTIONS.add(
+            connection
+        )
+
+
+        # --------------------------------------------------------
+        # Connect SSH
+        # --------------------------------------------------------
+
+        await connection.connect()
+
+
+        # --------------------------------------------------------
+        # Start SFTP
+        # ========================================================
+
+        await connection.start_sftp()
+
+
+        # --------------------------------------------------------
+        # Get initial terminal size
+        # --------------------------------------------------------
+
+        cols = message.get(
+            "cols",
+            80,
+        )
+
+        rows = message.get(
+            "rows",
+            24,
+        )
+
+
+        try:
+
+            cols = int(cols)
+            rows = int(rows)
+
+
+        except (TypeError, ValueError):
+
+            cols = 80
+            rows = 24
+
+
+        cols = max(
+            1,
+            min(cols, 1000),
+        )
+
+        rows = max(
+            1,
+            min(rows, 1000),
+        )
+
+
+        # --------------------------------------------------------
+        # Start real PTY
+        # --------------------------------------------------------
+
+        await connection.start_shell(
+            cols,
+            rows,
+        )
+
+
+        # --------------------------------------------------------
+        # Run PTY output and WebSocket input concurrently
+        # --------------------------------------------------------
+
+        shell_task = asyncio.create_task(
+
+            connection.read_shell()
+
+        )
+
+
+        websocket_task = asyncio.create_task(
+
+            websocket_reader(
+                connection
+            )
+
+        )
+
+
+        done, pending = await asyncio.wait(
+
+            {
+                shell_task,
+                websocket_task,
+            },
+
+            return_when=asyncio.FIRST_COMPLETED,
+
+        )
+
+
+        for task in pending:
+
+            task.cancel()
+
+
+        await asyncio.gather(
+
+            *pending,
+
+            return_exceptions=True,
+
+        )
+
+
+        for task in done:
+
+            if task.cancelled():
+                continue
+
+
+            exception = task.exception()
+
+
+            if exception:
+                raise exception
+
+
+    except asyncio.TimeoutError:
+
+        log_error(
+            "WebSocket connection timed out"
+        )
+
+
+    except asyncssh.PermissionDenied:
+
+        log_error(
+            "SSH authentication failed"
+        )
+
+
+        if connection:
+
+            with contextlib.suppress(Exception):
+
+                await connection.send({
+
+                    "type": "error",
+
+                    "message": (
+                        "SSH authentication failed"
+                    ),
+
+                })
+
+
+    except asyncssh.HostKeyNotVerifiable as error:
+
+        log_error(
+            f"SSH host key error: {error}"
+        )
+
+
+        if connection:
+
+            with contextlib.suppress(Exception):
+
+                await connection.send({
+
+                    "type": "error",
+
+                    "message": (
+                        f"SSH host key error: "
+                        f"{error}"
+                    ),
+
+                })
+
+
+    except Exception as error:
+
+        log_error(
+            str(error)
+        )
+
+
+        if connection:
+
+            with contextlib.suppress(Exception):
+
+                await connection.send({
+
+                    "type": "error",
+
+                    "message": str(error),
+
+                })
+
+
+    finally:
+
+        if connection:
+
+            ACTIVE_CONNECTIONS.discard(
+                connection
+            )
+
+
+            await connection.close()
+
+
+# ================================================================
+# Main
+# ================================================================
+
+async def main():
+
+    stop_event = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+
+
+    def request_shutdown():
+
+        if not stop_event.is_set():
+
+            print()
+
+            log(
+                "shutdown requested..."
+            )
+
+            stop_event.set()
+
+
+    for signal_name in (
+
+        signal.SIGINT,
+
+        signal.SIGTERM,
+
+    ):
+
+        with contextlib.suppress(
+            NotImplementedError
+        ):
+
+            loop.add_signal_handler(
+
+                signal_name,
+
+                request_shutdown,
+
+            )
+
+
+    print()
+
+    print(
+        "  \033[1m"
+        "\033[38;5;208m"
+        "🔥 OpenRelay Bridge — AsyncSSH"
+        "\033[0m"
+    )
+
+    print(
+        "  \033[2m"
+        "──────────────────────────────────────────"
+        "\033[0m"
+    )
+
+    print(
+        f"  WebSocket: "
+        f"ws://{WEBSOCKET_HOST}:{WEBSOCKET_PORT}"
+    )
+
+    print(
+        f"  SSH:       "
+        f"{SSH_USERNAME}@{SSH_HOST}:{SSH_PORT}"
+    )
+
+    print(
+        f"  Auth:      "
+        f"{'password' if SSH_PASSWORD else 'SSH key'}"
+    )
+
+    print(
+        "  Files:     SFTP"
+    )
+
+    print(
+        "  Terminal:  SSH PTY"
+    )
+
+    print()
+
+    print(
+        "  \033[2m"
+        "Press Ctrl+C to stop OpenRelay"
+        "\033[0m"
+    )
+
+    print()
+
+
+    async with websockets.serve(
+
+        handler,
+
+        WEBSOCKET_HOST,
+
+        WEBSOCKET_PORT,
+
+        ping_interval=20,
+
+        ping_timeout=20,
+
+        max_size=32 * 1024 * 1024,
+
+    ):
+
+        log_success(
+            "WebSocket server started"
+        )
+
+
+        await stop_event.wait()
+
+
+    # ============================================================
+    # Close active connections
+    # ============================================================
+
+    if ACTIVE_CONNECTIONS:
+
+        log(
+            f"closing "
+            f"{len(ACTIVE_CONNECTIONS)} "
+            f"active connection(s)..."
+        )
+
+
+        await asyncio.gather(
+
+            *[
+
+                connection.close()
+
+                for connection
+
+                in list(
+                    ACTIVE_CONNECTIONS
+                )
+
+            ],
+
+            return_exceptions=True,
+
+        )
+
+
+    ACTIVE_CONNECTIONS.clear()
+
+
+    log_success(
+        "OpenRelay stopped"
+    )
+
+
+    return 0
+
+
+if __name__ == "__main__":
+
+    try:
+
+        exit_code = asyncio.run(
+            main()
+        )
+
+
+        raise SystemExit(
+            exit_code or 0
+        )
+
+
+    except KeyboardInterrupt:
+
+        print()
+
+        log_success(
+            "OpenRelay stopped"
+        )
+PYEOF
+
+
+chmod +x "$BRIDGE_FILE"
+
+
+# ================================================================
+# Start bridge in foreground
+# ================================================================
+
 echo ""
-echo -e "${GREEN}▶ Starting bridge...${NC}"
+echo -e "${GREEN}  ✅ OpenRelay configured${NC}"
+echo ""
+echo -e "  SSH: ${BLUE}${TARGET}:${PORT}${NC}"
+echo ""
+echo -e "${BOLD}  Starting AsyncSSH bridge...${NC}"
+echo -e "${DIM}  Press Ctrl+C to stop OpenRelay.${NC}"
 echo ""
 
 cd "$BRIDGE_DIR"
 
-# Kill any existing bridge process using port 8080 or matching bridge.py
-pkill -f bridge.py || true
-if [ -f bridge.pid ]; then
-    kill $(cat bridge.pid) 2>/dev/null || true
-    rm bridge.pid
-fi
-if os_exists_socket=$(ls sockets/ssh_mux* 2>/dev/null); then
-    # Exit existing multiplex socket connections
-    ssh -O exit -S sockets/ssh_mux "$TARGET" 2>/dev/null || true
-fi
-if command -v lsof &>/dev/null; then
-    lsof -t -i :8080 | xargs kill -9 2>/dev/null || true
-fi
-sleep 0.5
 
-nohup env \
-  OPENRELAY_PORT="8080" \
-  OPENRELAY_SSH_TARGET="$TARGET" \
-  OPENRELAY_SSH_PORT="$PORT" \
-  SSHPASS="$PASSWORD" \
-  python bridge.py > bridge.log 2>&1 &
-BRIDGE_PID=$!
-echo "$BRIDGE_PID" > bridge.pid
+# Password exists only in this process environment.
+#
+# It is never written to config.sh or another file.
+#
+# exec replaces this Bash process with Python.
 
-sleep 1.5
-
-if kill -0 "$BRIDGE_PID" 2>/dev/null; then
-    echo ""
-    echo -e "${GREEN}  ✅ Bridge running${NC}"
-    echo -e "  PID:     $BRIDGE_PID"
-    echo -e "  SSH:     ${BLUE}$TARGET${NC}"
-    echo -e "  Address: ${BLUE}ws://127.0.0.1:8080${NC}"
-    echo ""
-    echo -e "  ${DIM}Restart: cd ~/.openrelay && bash restart.sh${NC}"
-    echo -e "  ${DIM}Stop:    kill $BRIDGE_PID${NC}"
-    echo ""
-    echo -e "  ${BOLD}Now open the PWA and connect!${NC}"
-    echo ""
-else
-    echo -e "${RED}  ❌ Bridge failed to start. Check:${NC}"
-    echo -e "  ${DIM}cat $BRIDGE_DIR/bridge.log${NC}"
-    echo ""
-fi
-
-# Write a restart script
-cat > "$BRIDGE_DIR/restart.sh" << 'RSEOF'
-#!/data/data/com.termux/files/usr/bin/bash
-cd ~/.openrelay
-source config.sh
-pkill -f bridge.py || true
-if [ -f bridge.pid ]; then
-    kill $(cat bridge.pid) 2>/dev/null || true
-    rm bridge.pid
-fi
-if command -v lsof &>/dev/null; then
-    lsof -t -i :8080 | xargs kill -9 2>/dev/null || true
-fi
-sleep 0.5
-nohup env OPENRELAY_PORT="$OPENRELAY_PORT" OPENRELAY_SSH_TARGET="$OPENRELAY_SSH_TARGET" OPENRELAY_SSH_PORT="$OPENRELAY_SSH_PORT" SSHPASS="$SSHPASS" python bridge.py > bridge.log 2>&1 &
-echo $! > bridge.pid
-echo "Bridge restarted (PID: $(cat bridge.pid))"
-RSEOF
-chmod +x "$BRIDGE_DIR/restart.sh"
+exec env \
+    OPENRELAY_PORT="8080" \
+    OPENRELAY_SSH_TARGET="$TARGET" \
+    OPENRELAY_SSH_PORT="$PORT" \
+    OPENRELAY_SSH_PASSWORD="$PASSWORD" \
+    python "$BRIDGE_FILE"
