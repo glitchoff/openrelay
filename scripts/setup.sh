@@ -128,13 +128,26 @@ async def _ssh(cmd: str, input_data: bytes | None = None, timeout: int = 30) -> 
         return "", str(e), -1
 
 # ── Command builders (POSIX vs PowerShell) ──────────────────────
+def _posix_path(path: str) -> str:
+    """Replace leading ~ with $HOME so bash expands inside double quotes."""
+    if path.startswith('~/'):
+        return '$HOME/' + path[2:]
+    if path == '~':
+        return '$HOME'
+    return path
+
+def _ps_path(path: str) -> str:
+    """Escape and wrap for PowerShell, with inline ~→$env:USERPROFILE."""
+    escaped = path.replace("'", "''")
+    return f"$p='{escaped}';if($p[0]-eq'~'){{$p=$env:USERPROFILE+$p.Substring(1)}}"
+
 def build_list_dir(path: str, is_windows: bool) -> str:
     if is_windows:
-        escaped = path.replace('"', '""').replace('$', '`$')
-        return (f"Get-ChildItem -Path \"{escaped}\" -Force | "
+        prefix = _ps_path(path)
+        return (f"{prefix};Get-ChildItem -Path $p -Force | "
                 f"ForEach-Object {{ \"$(if($_.PSIsContainer){{'d'}}else{{'f'}})`t$($_.Length)`t$($_.Name)\" }}")
-    escaped = path.replace("'", "'\\''")
-    return (f"cd '{escaped}' 2>/dev/null || cd ~ 2>/dev/null; "
+    p = _posix_path(path)
+    return (f"cd \"{p}\" 2>/dev/null; "
             f"for e in * .*; do "
             f"[ \"$e\" = \".\" -o \"$e\" = \"..\" ] && continue; "
             f"if [ -L \"$e\" ]; then t=l; s=0; "
@@ -144,17 +157,17 @@ def build_list_dir(path: str, is_windows: bool) -> str:
 
 def build_read_file(path: str, is_windows: bool) -> str:
     if is_windows:
-        escaped = path.replace('"', '""').replace('$', '`$')
-        return f"[Convert]::ToBase64String([IO.File]::ReadAllBytes(\"{escaped}\"))"
-    escaped = path.replace("'", "'\\''")
-    return f"base64 < '{escaped}'"
+        prefix = _ps_path(path)
+        return f"{prefix};[Convert]::ToBase64String([IO.File]::ReadAllBytes($p))"
+    p = _posix_path(path)
+    return f"base64 < \"{p}\""
 
 def build_write_file(path: str, is_windows: bool) -> str:
     if is_windows:
-        escaped = path.replace('"', '""').replace('$', '`$')
-        return f"$b=[Convert]::FromBase64String([Console]::In.ReadToEnd());[IO.File]::WriteAllBytes(\"{escaped}\",$b)"
-    escaped = path.replace("'", "'\\''")
-    return f"base64 -d > '{escaped}'"
+        prefix = _ps_path(path)
+        return f"{prefix};[Convert]::FromBase64String([Console]::In.ReadToEnd())|ForEach-Object{{[IO.File]::WriteAllBytes($p,$_)}}"
+    p = _posix_path(path)
+    return f"base64 -d > \"{p}\""
 
 async def handler(websocket):
     proc = None
@@ -227,7 +240,7 @@ async def handler(websocket):
                     elif t == "resize":
                         pass
                     elif t == "list_dir":
-                        path = os.path.expanduser(msg["path"])
+                        path = msg["path"]
                         stdout, stderr, code = await _ssh(build_list_dir(path, IS_WINDOWS))
                         if code == 0:
                             entries = []
@@ -256,7 +269,7 @@ async def handler(websocket):
                                 "message": f"Failed to list directory: {stderr or stdout}"
                             }))
                     elif t == "read_file":
-                        path = os.path.expanduser(msg["path"])
+                        path = msg["path"]
                         stdout, stderr, code = await _ssh(build_read_file(path, IS_WINDOWS))
                         output = stdout.strip()
                         if code == 0 and output:
@@ -274,7 +287,7 @@ async def handler(websocket):
                                 "message": f"Failed to read file: {stderr or 'Empty output'}"
                             }))
                     elif t == "write_file":
-                        path = os.path.expanduser(msg["path"])
+                        path = msg["path"]
                         content = msg["content"]
                         content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
                         stdout, stderr, code = await _ssh(build_write_file(path, IS_WINDOWS), input_data=content_b64.encode())
