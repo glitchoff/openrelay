@@ -16,8 +16,11 @@ SSHPASS = os.environ.get("SSHPASS", "")
 
 async def handler(websocket):
     conn = None
-    chan = None
     sftp = None
+    ptys = {}
+    pty_counter = 0
+    reader_tasks = []
+
     try:
         # First message must be "connect"
         raw = await websocket.recv()
@@ -74,35 +77,90 @@ async def handler(websocket):
         # Start SFTP client
         sftp = await conn.start_sftp_client()
 
-        # Start PTY shell
-        chan = await conn.create_subprocess(
-            term_type="xterm-256color",
-            term_size=(80, 24),
-            encoding=None
-        )
+        # Start initial PTY (id=0)
+        import shlex
 
-        async def read_pty():
-            while True:
-                try:
+        def make_pty_cmd(cwd=None):
+            if cwd:
+                return f"cd {shlex.quote(cwd)} && exec $SHELL"
+            return None
+
+        async def read_one_pty(pty_id):
+            try:
+                while True:
+                    chan = ptys.get(pty_id)
+                    if not chan:
+                        break
                     data = await chan.stdout.read(4096)
                     if not data:
                         break
                     text = data.decode("utf-8", errors="replace")
                     await websocket.send(
-                        json.dumps({"type": "stdout", "data": text})
+                        json.dumps({"type": "stdout", "pty_id": pty_id, "data": text})
                     )
-                except Exception:
-                    break
+            except Exception:
+                pass
 
-        async def write_pty():
+        async def spawn_pty(cwd=None):
+            nonlocal pty_counter
+            cmd = make_pty_cmd(cwd)
+            pty_counter += 1
+            new_id = pty_counter
+            chan = await conn.create_subprocess(
+                cmd,
+                term_type="xterm-256color",
+                term_size=(80, 24),
+                encoding=None
+            )
+            ptys[new_id] = chan
+            task = asyncio.create_task(read_one_pty(new_id))
+            reader_tasks.append(task)
+            await websocket.send(
+                json.dumps({"type": "pty_created", "pty_id": new_id})
+            )
+            return new_id
+
+        # Create initial PTY (id=0)
+        chan0 = await conn.create_subprocess(
+            make_pty_cmd(None),
+            term_type="xterm-256color",
+            term_size=(80, 24),
+            encoding=None
+        )
+        ptys[0] = chan0
+        reader_tasks.append(asyncio.create_task(read_one_pty(0)))
+
+        async def handle_messages():
             try:
                 async for message in websocket:
                     msg = json.loads(message)
                     typ = msg.get("type")
+
                     if typ == "stdin":
-                        chan.stdin.write(msg["data"].encode("utf-8"))
+                        pty_id = msg.get("pty_id", 0)
+                        chan = ptys.get(pty_id)
+                        if chan:
+                            chan.stdin.write(msg["data"].encode("utf-8"))
+
                     elif typ == "resize":
-                        chan.change_terminal_size(msg["cols"], msg["rows"])
+                        pty_id = msg.get("pty_id", 0)
+                        chan = ptys.get(pty_id)
+                        if chan:
+                            chan.change_terminal_size(msg["cols"], msg["rows"])
+
+                    elif typ == "create_pty":
+                        await spawn_pty(msg.get("cwd"))
+
+                    elif typ == "close_pty":
+                        pty_id = msg.get("pty_id")
+                        if pty_id is not None:
+                            chan = ptys.pop(pty_id, None)
+                            if chan:
+                                try:
+                                    chan.close()
+                                except Exception:
+                                    pass
+
                     elif typ == "list_dir":
                         path = msg["path"]
                         try:
@@ -141,6 +199,7 @@ async def handler(websocket):
                                     "message": f"Failed to list directory: {str(err)}",
                                 })
                             )
+
                     elif typ == "read_file":
                         path = msg["path"]
                         try:
@@ -168,6 +227,7 @@ async def handler(websocket):
                                     "message": f"Failed to read file: {str(err)}",
                                 })
                             )
+
                     elif typ == "write_file":
                         path = msg["path"]
                         content = msg["content"]
@@ -196,12 +256,67 @@ async def handler(websocket):
                                     "message": f"Failed to write file: {str(err)}",
                                 })
                             )
+
+                    elif typ == "mkdir":
+                        path = msg["path"]
+                        try:
+                            expanded_path = path
+                            if path.startswith("~"):
+                                home = await sftp.realpath(".")
+                                expanded_path = path.replace("~", home, 1)
+                            await sftp.mkdir(expanded_path)
+                            await websocket.send(
+                                json.dumps({
+                                    "type": "mkdir_result",
+                                    "path": path,
+                                    "success": True,
+                                })
+                            )
+                        except Exception as err:
+                            await websocket.send(
+                                json.dumps({
+                                    "type": "error",
+                                    "path": path,
+                                    "message": f"Failed to create directory: {str(err)}",
+                                })
+                            )
+
+                    elif typ == "rename":
+                        old_path = msg["old_path"]
+                        new_path = msg["new_path"]
+                        try:
+                            expanded_old = old_path
+                            expanded_new = new_path
+                            if old_path.startswith("~"):
+                                home = await sftp.realpath(".")
+                                expanded_old = old_path.replace("~", home, 1)
+                            if new_path.startswith("~"):
+                                home = await sftp.realpath(".")
+                                expanded_new = new_path.replace("~", home, 1)
+                            await sftp.rename(expanded_old, expanded_new)
+                            await websocket.send(
+                                json.dumps({
+                                    "type": "rename_result",
+                                    "old_path": old_path,
+                                    "new_path": new_path,
+                                    "success": True,
+                                })
+                            )
+                        except Exception as err:
+                            await websocket.send(
+                                json.dumps({
+                                    "type": "error",
+                                    "path": old_path,
+                                    "message": f"Failed to rename: {str(err)}",
+                                })
+                            )
+
                     elif typ == "disconnect":
                         break
             except Exception:
                 pass
 
-        await asyncio.gather(read_pty(), write_pty())
+        await handle_messages()
 
     except Exception as e:
         try:
@@ -209,11 +324,15 @@ async def handler(websocket):
         except Exception:
             pass
     finally:
-        if chan:
+        for pty_id, chan in list(ptys.items()):
             try:
                 chan.close()
             except Exception:
                 pass
+        for task in reader_tasks:
+            task.cancel()
+        if reader_tasks:
+            await asyncio.gather(*reader_tasks, return_exceptions=True)
         if sftp:
             try:
                 sftp.exit()

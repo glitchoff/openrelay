@@ -30,7 +30,7 @@ BLUE='\033[1;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-VERSION="3.0.0"
+VERSION="3.1.0"
 
 BRIDGE_DIR="$HOME/.openrelay"
 CONFIG_FILE="$BRIDGE_DIR/config.sh"
@@ -319,7 +319,9 @@ class OpenRelayConnection:
 
         self.ssh = None
 
-        self.shell = None
+        self.shells = {}
+
+        self.shell_counter = 0
 
         self.sftp = None
 
@@ -433,39 +435,52 @@ class OpenRelayConnection:
         self,
         cols=80,
         rows=24,
+        cwd=None,
     ):
 
-        self.shell = await self.ssh.create_process(
+        self.shell_counter += 1
+        shell_id = self.shell_counter
 
+        if cwd:
+            import shlex
+            cmd = f"cd {shlex.quote(cwd)} && exec $SHELL"
+        else:
+            cmd = None
+
+        shell = await self.ssh.create_process(
+            cmd,
             term_type="xterm-256color",
-
-            term_size=(
-                cols,
-                rows,
-            ),
-
+            term_size=(cols, rows),
             encoding=None,
-
         )
 
+        self.shells[shell_id] = shell
 
         log(
             f"{self.connection_id}: "
-            f"PTY shell started ({cols}x{rows})"
+            f"PTY shell #{shell_id} started "
+            f"({cols}x{rows})"
         )
 
+        return shell_id
+
 
     # ============================================================
-    # Read PTY output
+    # Read PTY output for a specific shell
     # ============================================================
 
-    async def read_shell(self):
+    async def read_shell(self, shell_id):
+
+        shell = self.shells.get(shell_id)
+
+        if not shell:
+            return
 
         try:
 
             while True:
 
-                data = await self.shell.stdout.read(
+                data = await shell.stdout.read(
                     8192
                 )
 
@@ -473,15 +488,6 @@ class OpenRelayConnection:
                 if not data:
                     break
 
-
-                # AsyncSSH is using encoding=None.
-                #
-                # This means stdout is raw bytes.
-                #
-                # Decode only for JSON/WebSocket transport.
-                #
-                # ANSI escape sequences remain intact and xterm.js
-                # can interpret them normally.
 
                 text = data.decode(
                     "utf-8",
@@ -492,6 +498,8 @@ class OpenRelayConnection:
                 await self.send({
 
                     "type": "stdout",
+
+                    "pty_id": shell_id,
 
                     "data": text,
 
@@ -507,7 +515,7 @@ class OpenRelayConnection:
 
             log_error(
                 f"{self.connection_id}: "
-                f"PTY reader failed: {error}"
+                f"PTY #{shell_id} reader failed: {error}"
             )
 
 
@@ -515,9 +523,11 @@ class OpenRelayConnection:
     # Write PTY input
     # ============================================================
 
-    async def write_stdin(self, data):
+    async def write_stdin(self, shell_id, data):
 
-        if not self.shell:
+        shell = self.shells.get(shell_id)
+
+        if not shell:
             return
 
 
@@ -525,7 +535,7 @@ class OpenRelayConnection:
             return
 
 
-        self.shell.stdin.write(
+        shell.stdin.write(
             data.encode(
                 "utf-8",
                 errors="replace",
@@ -533,16 +543,18 @@ class OpenRelayConnection:
         )
 
 
-        await self.shell.stdin.drain()
+        await shell.stdin.drain()
 
 
     # ============================================================
     # Resize PTY
     # ============================================================
 
-    def resize(self, cols, rows):
+    def resize(self, shell_id, cols, rows):
 
-        if not self.shell:
+        shell = self.shells.get(shell_id)
+
+        if not shell:
             return
 
 
@@ -560,7 +572,7 @@ class OpenRelayConnection:
                 return
 
 
-            self.shell.change_terminal_size(
+            shell.change_terminal_size(
                 cols,
                 rows,
             )
@@ -568,13 +580,48 @@ class OpenRelayConnection:
 
             log(
                 f"{self.connection_id}: "
-                f"PTY resized to {cols}x{rows}"
+                f"PTY #{shell_id} resized to {cols}x{rows}"
             )
 
 
         except (TypeError, ValueError):
 
             pass
+
+
+    # ============================================================
+    # Close a specific PTY
+    # ============================================================
+
+    async def close_shell(self, shell_id):
+
+        shell = self.shells.pop(
+            shell_id,
+            None,
+        )
+
+        if not shell:
+            return
+
+        with contextlib.suppress(Exception):
+
+            shell.stdin.write_eof()
+
+        with contextlib.suppress(Exception):
+
+            shell.close()
+
+        with contextlib.suppress(Exception):
+
+            await asyncio.wait_for(
+                shell.wait_closed(),
+                timeout=3,
+            )
+
+        log(
+            f"{self.connection_id}: "
+            f"PTY #{shell_id} closed"
+        )
 
 
     # ============================================================
@@ -595,7 +642,7 @@ class OpenRelayConnection:
             return await self.sftp.realpath(".")
 
 
-        # Bare drive letter ("D:") → root ("D:/")
+        # Bare drive letter ("D:") -> root ("D:/")
         if len(path) == 2 and path[1] == ':':
             path += '/'
 
@@ -724,6 +771,39 @@ class OpenRelayConnection:
 
 
     # ============================================================
+    # Create directory
+    # ============================================================
+
+    async def create_directory(
+        self,
+        path,
+    ):
+
+        path = await self.resolve_path(path)
+
+        await self.sftp.mkdir(path)
+
+
+    # ============================================================
+    # Rename
+    # ============================================================
+
+    async def rename_path(
+        self,
+        old_path,
+        new_path,
+    ):
+
+        old_path = await self.resolve_path(old_path)
+        new_path = await self.resolve_path(new_path)
+
+        await self.sftp.rename(
+            old_path,
+            new_path,
+        )
+
+
+    # ============================================================
     # Close connection
     # ============================================================
 
@@ -743,30 +823,12 @@ class OpenRelayConnection:
 
 
         # --------------------------------------------------------
-        # Close shell
+        # Close all shells
         # --------------------------------------------------------
 
-        if self.shell:
+        for shell_id in list(self.shells.keys()):
 
-            with contextlib.suppress(Exception):
-
-                self.shell.stdin.write_eof()
-
-
-            with contextlib.suppress(Exception):
-
-                self.shell.close()
-
-
-            with contextlib.suppress(Exception):
-
-                await asyncio.wait_for(
-                    self.shell.wait_closed(),
-                    timeout=3,
-                )
-
-
-            self.shell = None
+            await self.close_shell(shell_id)
 
 
         # --------------------------------------------------------
@@ -1027,6 +1089,127 @@ async def handle_write_file(
 
 
 # ================================================================
+# Handle mkdir
+# ================================================================
+
+async def handle_mkdir(
+    connection,
+    message,
+):
+
+    request_id = message.get(
+        "id",
+        "",
+    )
+
+    path = message.get(
+        "path"
+    )
+
+
+    try:
+
+        await connection.create_directory(
+            path
+        )
+
+
+        await connection.send({
+
+            "type": "mkdir_result",
+
+            "path": path,
+
+            "id": request_id,
+
+            "success": True,
+
+        })
+
+
+    except Exception as error:
+
+        await connection.send({
+
+            "type": "error",
+
+            "path": path,
+
+            "id": request_id,
+
+            "message": (
+                f"Failed to create directory: "
+                f"{error}"
+            ),
+
+        })
+
+
+# ================================================================
+# Handle rename
+# ================================================================
+
+async def handle_rename(
+    connection,
+    message,
+):
+
+    request_id = message.get(
+        "id",
+        "",
+    )
+
+    old_path = message.get(
+        "old_path"
+    )
+
+    new_path = message.get(
+        "new_path"
+    )
+
+
+    try:
+
+        await connection.rename_path(
+            old_path,
+            new_path,
+        )
+
+
+        await connection.send({
+
+            "type": "rename_result",
+
+            "old_path": old_path,
+
+            "new_path": new_path,
+
+            "id": request_id,
+
+            "success": True,
+
+        })
+
+
+    except Exception as error:
+
+        await connection.send({
+
+            "type": "error",
+
+            "path": old_path,
+
+            "id": request_id,
+
+            "message": (
+                f"Failed to rename: "
+                f"{error}"
+            ),
+
+        })
+
+
+# ================================================================
 # WebSocket reader
 # ================================================================
 
@@ -1070,9 +1253,14 @@ async def websocket_reader(
             await connection.write_stdin(
 
                 message.get(
+                    "pty_id",
+                    0,
+                ),
+
+                message.get(
                     "data",
                     "",
-                )
+                ),
 
             )
 
@@ -1086,6 +1274,11 @@ async def websocket_reader(
             connection.resize(
 
                 message.get(
+                    "pty_id",
+                    0,
+                ),
+
+                message.get(
                     "cols",
                     80,
                 ),
@@ -1093,6 +1286,62 @@ async def websocket_reader(
                 message.get(
                     "rows",
                     24,
+                ),
+
+            )
+
+
+        # --------------------------------------------------------
+        # Create PTY
+        # --------------------------------------------------------
+
+        elif message_type == "create_pty":
+
+            try:
+
+                pty_id = await connection.start_shell(
+
+                    cols=80,
+                    rows=24,
+                    cwd=message.get(
+                        "cwd"
+                    ),
+
+                )
+
+
+                await connection.send({
+
+                    "type": "pty_created",
+
+                    "pty_id": pty_id,
+
+                })
+
+            except Exception as error:
+
+                await connection.send({
+
+                    "type": "error",
+
+                    "message": (
+                        f"Failed to create PTY: "
+                        f"{error}"
+                    ),
+
+                })
+
+
+        # --------------------------------------------------------
+        # Close PTY
+        # --------------------------------------------------------
+
+        elif message_type == "close_pty":
+
+            await connection.close_shell(
+
+                message.get(
+                    "pty_id"
                 ),
 
             )
@@ -1129,6 +1378,30 @@ async def websocket_reader(
         elif message_type == "write_file":
 
             await handle_write_file(
+                connection,
+                message,
+            )
+
+
+        # --------------------------------------------------------
+        # Mkdir
+        # --------------------------------------------------------
+
+        elif message_type == "mkdir":
+
+            await handle_mkdir(
+                connection,
+                message,
+            )
+
+
+        # --------------------------------------------------------
+        # Rename
+        # --------------------------------------------------------
+
+        elif message_type == "rename":
+
+            await handle_rename(
                 connection,
                 message,
             )
@@ -1173,6 +1446,8 @@ async def websocket_reader(
 async def handler(websocket):
 
     connection = None
+
+    reader_tasks = []
 
 
     try:
@@ -1300,25 +1575,36 @@ async def handler(websocket):
 
 
         # --------------------------------------------------------
-        # Start real PTY
+        # Start initial PTY (id=0)
         # --------------------------------------------------------
 
-        await connection.start_shell(
+        shell_id = await connection.start_shell(
             cols,
             rows,
+            cwd=None,
         )
 
 
         # --------------------------------------------------------
-        # Run PTY output and WebSocket input concurrently
+        # Start PTY reader tasks
         # --------------------------------------------------------
 
         shell_task = asyncio.create_task(
 
-            connection.read_shell()
+            connection.read_shell(
+                shell_id
+            )
 
         )
 
+        reader_tasks.append(
+            shell_task
+        )
+
+
+        # --------------------------------------------------------
+        # Run WebSocket reader (creates more PTYs as needed)
+        # --------------------------------------------------------
 
         websocket_task = asyncio.create_task(
 
@@ -1326,6 +1612,10 @@ async def handler(websocket):
                 connection
             )
 
+        )
+
+        reader_tasks.append(
+            websocket_task
         )
 
 

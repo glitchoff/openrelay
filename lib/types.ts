@@ -12,15 +12,27 @@ export interface ConnectMsg {
   password?: string;
 }
 
+export interface CreatePtyMsg {
+  type: "create_pty";
+  cwd?: string;
+}
+
+export interface ClosePtyMsg {
+  type: "close_pty";
+  pty_id: number;
+}
+
 export interface StdinMsg {
   type: "stdin";
   data: string;
+  pty_id?: number;
 }
 
 export interface ResizeMsg {
   type: "resize";
   rows: number;
   cols: number;
+  pty_id?: number;
 }
 
 export interface ListDirMsg {
@@ -61,6 +73,8 @@ export interface DisconnectMsg {
 
 export type OutgoingMsg =
   | ConnectMsg
+  | CreatePtyMsg
+  | ClosePtyMsg
   | StdinMsg
   | ResizeMsg
   | ListDirMsg
@@ -79,6 +93,12 @@ export interface ConnectedResult {
 export interface StdoutResult {
   type: "stdout";
   data: string;
+  pty_id?: number;
+}
+
+export interface PtyCreatedResult {
+  type: "pty_created";
+  pty_id: number;
 }
 
 export interface ListDirResult {
@@ -127,6 +147,7 @@ export interface ErrorResult {
 export type IncomingMsg =
   | ConnectedResult
   | StdoutResult
+  | PtyCreatedResult
   | ListDirResult
   | ReadFileResult
   | WriteFileResult

@@ -30,6 +30,10 @@ interface ConnectionState {
   projectPath: string | null;
   setProjectPath: (path: string | null) => void;
   connectionError: string | null;
+  _ptyStdout: Map<number, (data: string) => void>;
+  createPty: (cwd?: string) => Promise<number>;
+  closePty: (ptyId: number) => void;
+  setOnPtyStdout: (ptyId: number, cb: ((data: string) => void) | null) => void;
 }
 
 export const useConnectionStore = create<ConnectionState>((set, get) => ({
@@ -41,6 +45,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   _pathToId: new Map(),
   _nextId: 1,
   onStdout: null,
+  _ptyStdout: new Map<number, (data: string) => void>(),
   projectPath: null,
   setProjectPath: (path) => set({ projectPath: path }),
   connectionError: null,
@@ -72,9 +77,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     ws.onmessage = (event) => {
       try {
         const msg: IncomingMsg = JSON.parse(event.data);
-        const { pending, _pathToId } = get();
+        const { pending, _pathToId, _ptyStdout } = get();
 
-        // Resolve by id (new bridge) or fall back to path→id lookup (old bridge)
         const resolveKey = (msgId?: string, msgPath?: string): string | undefined => {
           if (msgId) return msgId;
           if (msgPath) return _pathToId.get(msgPath);
@@ -94,9 +98,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
         switch (msg.type) {
           case "connected":
             break;
-          case "stdout":
-            get().onStdout?.(msg.data);
+          case "stdout": {
+            const cb = msg.pty_id != null ? _ptyStdout.get(msg.pty_id) : get().onStdout;
+            cb?.(msg.data);
             break;
+          }
+          case "pty_created": {
+            const p = pending.get("create_pty");
+            if (p) {
+              p.resolve(msg.pty_id);
+              pending.delete("create_pty");
+            }
+            break;
+          }
           case "list_dir_result":
             settle(resolveKey(msg.id, msg.path), (p) => p.resolve(msg.entries));
             break;
@@ -159,6 +173,26 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   },
 
   setOnStdout: (cb) => set({ onStdout: cb }),
+
+  createPty: (cwd?: string) =>
+    new Promise<number>((resolve, reject) => {
+      const state = get();
+      state.pending.set("create_pty", { resolve, reject, path: "" } as Pending);
+      state.send({ type: "create_pty", cwd });
+    }),
+
+  closePty: (ptyId: number) => {
+    get()._ptyStdout.delete(ptyId);
+    get().send({ type: "close_pty", pty_id: ptyId });
+  },
+
+  setOnPtyStdout: (ptyId, cb) =>
+    set((s) => {
+      const map = new Map(s._ptyStdout);
+      if (cb) map.set(ptyId, cb);
+      else map.delete(ptyId);
+      return { _ptyStdout: map };
+    }),
 
   listDir: (path: string) =>
     new Promise((resolve, reject) => {

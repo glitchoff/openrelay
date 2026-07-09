@@ -3,6 +3,7 @@ import { create } from "zustand";
 export interface TerminalSession {
   id: string;
   title: string;
+  ptyId: number | null;
 }
 
 interface TerminalState {
@@ -13,19 +14,20 @@ interface TerminalState {
   removeTerminal: (id: string) => void;
   setActiveTerminal: (id: string) => void;
   setTitle: (id: string, title: string) => void;
+  setPtyId: (id: string, ptyId: number) => void;
 }
 
 let termCounter = 0;
 
 export const useTerminalStore = create<TerminalState>((set) => ({
-  terminals: [{ id: "term-0", title: "Terminal" }],
+  terminals: [{ id: "term-0", title: "Terminal", ptyId: null }],
   activeTerminal: "term-0",
 
   addTerminal: () => {
     termCounter++;
     const id = `term-${termCounter}`;
     set((s) => ({
-      terminals: [...s.terminals, { id, title: `Terminal ${termCounter}` }],
+      terminals: [...s.terminals, { id, title: `Terminal ${termCounter}`, ptyId: null }],
       activeTerminal: id,
     }));
   },
@@ -47,5 +49,10 @@ export const useTerminalStore = create<TerminalState>((set) => ({
   setTitle: (id, title) =>
     set((s) => ({
       terminals: s.terminals.map((t) => (t.id === id ? { ...t, title } : t)),
+    })),
+
+  setPtyId: (id, ptyId) =>
+    set((s) => ({
+      terminals: s.terminals.map((t) => (t.id === id ? { ...t, ptyId } : t)),
     })),
 }));

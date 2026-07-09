@@ -69,7 +69,9 @@ def list_dir_entries(path: str) -> list:
 
 # ── per-connection handler ─────────────────────────────────────────────────────
 async def handler(websocket):
-    proc = None
+    ptys = {}
+    pty_counter = 0
+    reader_tasks = []
 
     try:
         # ── handshake: wait for { type: "connect" } ────────────────────────
@@ -88,27 +90,84 @@ async def handler(websocket):
             "port": 0,
         }))
 
-        # ── spawn local shell ──────────────────────────────────────────────
-        proc = await asyncio.create_subprocess_exec(
+        async def spawn_pty(cwd=None):
+            nonlocal pty_counter
+            if cwd and os.path.isdir(expand(cwd)):
+                shell_cwd = expand(cwd)
+            else:
+                shell_cwd = os.getcwd()
+
+            proc = await asyncio.create_subprocess_exec(
+                *SHELL_CMD,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=shell_cwd,
+            )
+            pty_counter += 1
+            new_id = pty_counter
+            ptys[new_id] = proc
+
+            async def read_pty(pty_id):
+                try:
+                    while True:
+                        data = await proc.stdout.read(4096)
+                        if not data:
+                            break
+                        await websocket.send(json.dumps({
+                            "type": "stdout",
+                            "pty_id": pty_id,
+                            "data": data.decode("utf-8", errors="replace"),
+                        }))
+                except Exception:
+                    pass
+                finally:
+                    ptys.pop(pty_id, None)
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
+            task = asyncio.create_task(read_pty(new_id))
+            reader_tasks.append(task)
+            await websocket.send(json.dumps({
+                "type": "pty_created",
+                "pty_id": new_id,
+            }))
+            return new_id
+
+        # ── spawn initial local shell (id=0) ───────────────────────────────
+        first_cwd = os.getcwd()
+        proc0 = await asyncio.create_subprocess_exec(
             *SHELL_CMD,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            cwd=first_cwd,
         )
+        ptys[0] = proc0
 
-        # ── pump shell stdout → WS ─────────────────────────────────────────
-        async def read_shell():
-            while True:
-                try:
-                    data = await proc.stdout.read(4096)
+        async def read_pty0():
+            try:
+                while True:
+                    data = await proc0.stdout.read(4096)
                     if not data:
                         break
                     await websocket.send(json.dumps({
                         "type": "stdout",
+                        "pty_id": 0,
                         "data": data.decode("utf-8", errors="replace"),
                     }))
+            except Exception:
+                pass
+            finally:
+                ptys.pop(0, None)
+                try:
+                    proc0.kill()
                 except Exception:
-                    break
+                    pass
+
+        reader_tasks.append(asyncio.create_task(read_pty0()))
 
         # ── pump WS messages → shell / fs ops ─────────────────────────────
         async def handle_messages():
@@ -120,15 +179,29 @@ async def handler(websocket):
 
                 t      = msg.get("type")
                 req_id = msg.get("id", "")
+                pty_id = msg.get("pty_id", 0)
 
                 if t == "stdin":
+                    proc = ptys.get(pty_id)
                     if proc and proc.stdin:
                         proc.stdin.write(msg["data"].encode("utf-8"))
                         await proc.stdin.drain()
 
                 elif t == "resize":
-                    # Terminal resize — nothing to do for subprocess on Windows
                     pass
+
+                elif t == "create_pty":
+                    await spawn_pty(msg.get("cwd"))
+
+                elif t == "close_pty":
+                    pid = msg.get("pty_id")
+                    if pid is not None:
+                        proc = ptys.pop(pid, None)
+                        if proc:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
 
                 elif t == "list_dir":
                     path = msg.get("path", "")
@@ -190,10 +263,49 @@ async def handler(websocket):
                             "message": f"write_file failed: {err}",
                         }))
 
+                elif t == "mkdir":
+                    path = msg.get("path", "")
+                    try:
+                        real = expand(path)
+                        os.makedirs(real, exist_ok=True)
+                        await websocket.send(json.dumps({
+                            "type":    "mkdir_result",
+                            "path":    path,
+                            "id":      req_id,
+                            "success": True,
+                        }))
+                    except Exception as err:
+                        await websocket.send(json.dumps({
+                            "type":    "error",
+                            "path":    path,
+                            "id":      req_id,
+                            "message": f"mkdir failed: {err}",
+                        }))
+
+                elif t == "rename":
+                    old_path = msg.get("old_path", "")
+                    new_path = msg.get("new_path", "")
+                    try:
+                        os.rename(expand(old_path), expand(new_path))
+                        await websocket.send(json.dumps({
+                            "type":    "rename_result",
+                            "old_path": old_path,
+                            "new_path": new_path,
+                            "id":      req_id,
+                            "success": True,
+                        }))
+                    except Exception as err:
+                        await websocket.send(json.dumps({
+                            "type":    "error",
+                            "path":    old_path,
+                            "id":      req_id,
+                            "message": f"rename failed: {err}",
+                        }))
+
                 elif t == "disconnect":
                     break
 
-        await asyncio.gather(read_shell(), handle_messages())
+        await handle_messages()
 
     except Exception as e:
         try:
@@ -201,11 +313,15 @@ async def handler(websocket):
         except Exception:
             pass
     finally:
-        if proc:
+        for pid, proc in list(ptys.items()):
             try:
                 proc.kill()
             except Exception:
                 pass
+        for task in reader_tasks:
+            task.cancel()
+        if reader_tasks:
+            await asyncio.gather(*reader_tasks, return_exceptions=True)
 
 # ── main ───────────────────────────────────────────────────────────────────────
 async def main():
