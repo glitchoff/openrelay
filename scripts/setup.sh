@@ -16,7 +16,7 @@ BLUE='\033[1;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 BRIDGE_DIR="$HOME/.openrelay"
 CONFIG_FILE="$BRIDGE_DIR/config.sh"
 
