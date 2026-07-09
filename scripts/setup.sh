@@ -94,7 +94,6 @@ import asyncio
 import json
 import os
 import sys
-import stat
 import subprocess
 import base64
 
@@ -131,7 +130,8 @@ async def _ssh(cmd: str, input_data: bytes | None = None, timeout: int = 30) -> 
 # ── Command builders (POSIX vs PowerShell) ──────────────────────
 def build_list_dir(path: str, is_windows: bool) -> str:
     if is_windows:
-        return (f"Get-ChildItem -Path '{path}' -Force | "
+        escaped = path.replace('"', '""').replace('$', '`$')
+        return (f"Get-ChildItem -Path \"{escaped}\" -Force | "
                 f"ForEach-Object {{ \"$(if($_.PSIsContainer){{'d'}}else{{'f'}})`t$($_.Length)`t$($_.Name)\" }}")
     escaped = path.replace("'", "'\\''")
     return (f"cd '{escaped}' 2>/dev/null || cd ~ 2>/dev/null; "
@@ -144,13 +144,15 @@ def build_list_dir(path: str, is_windows: bool) -> str:
 
 def build_read_file(path: str, is_windows: bool) -> str:
     if is_windows:
-        return f"[Convert]::ToBase64String([IO.File]::ReadAllBytes('{path}'))"
+        escaped = path.replace('"', '""').replace('$', '`$')
+        return f"[Convert]::ToBase64String([IO.File]::ReadAllBytes(\"{escaped}\"))"
     escaped = path.replace("'", "'\\''")
     return f"base64 < '{escaped}'"
 
 def build_write_file(path: str, is_windows: bool) -> str:
     if is_windows:
-        return f"$b=[Convert]::FromBase64String([Console]::In.ReadToEnd());[IO.File]::WriteAllBytes('{path}',$b)"
+        escaped = path.replace('"', '""').replace('$', '`$')
+        return f"$b=[Convert]::FromBase64String([Console]::In.ReadToEnd());[IO.File]::WriteAllBytes(\"{escaped}\",$b)"
     escaped = path.replace("'", "'\\''")
     return f"base64 -d > '{escaped}'"
 
@@ -225,7 +227,7 @@ async def handler(websocket):
                     elif t == "resize":
                         pass
                     elif t == "list_dir":
-                        path = msg["path"]
+                        path = os.path.expanduser(msg["path"])
                         stdout, stderr, code = await _ssh(build_list_dir(path, IS_WINDOWS))
                         if code == 0:
                             entries = []
@@ -254,7 +256,7 @@ async def handler(websocket):
                                 "message": f"Failed to list directory: {stderr or stdout}"
                             }))
                     elif t == "read_file":
-                        path = msg["path"]
+                        path = os.path.expanduser(msg["path"])
                         stdout, stderr, code = await _ssh(build_read_file(path, IS_WINDOWS))
                         output = stdout.strip()
                         if code == 0 and output:
@@ -272,7 +274,7 @@ async def handler(websocket):
                                 "message": f"Failed to read file: {stderr or 'Empty output'}"
                             }))
                     elif t == "write_file":
-                        path = msg["path"]
+                        path = os.path.expanduser(msg["path"])
                         content = msg["content"]
                         content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
                         stdout, stderr, code = await _ssh(build_write_file(path, IS_WINDOWS), input_data=content_b64.encode())
