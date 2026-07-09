@@ -21,14 +21,14 @@ BRIDGE_DIR="$HOME/.opendeck"
 CONFIG_FILE="$BRIDGE_DIR/config.sh"
 
 echo -e "${YELLOW}"
-echo "   ____                     ____             __    "
-echo "  / __ \____  ___  ____  / __ \___  _______/ /__  "
-echo " / / / / __ \/ _ \/ __ \/ / / / _ \/ ___/ //_/ / /"
-echo "/ /_/ / /_/ /  __/ / / / /_/ /  __/ /__/ ,< / /_/ "
-echo "\____/ .___/\___/_/ /_/\____/\___/\___/_/|_|\__, / "
-echo "    /_/                                    /____/  "
+echo "   ____                   ____      __             "
+echo "  / __ \____  ___  ____  / __ \___ / /___ ___  __  "
+echo " / / / / __ \/ _ \/ __ \/ /_/ / _ \/ / __ \`/ / / /  "
+echo "/ /_/ / /_/ /  __/ / / / _, _/  __/ / /_/ /_/ / /   "
+echo "\____/ .___/\___/_/ /_/_/ |_|\___/_/_/\__,_/\__, /    "
+echo "    /_/                                    /____/    "
 echo -e "${NC}"
-echo -e "${BOLD}  🔥 OpenDeck Bridge Setup v${VERSION}${NC}"
+echo -e "${BOLD}  🔥 OpenRelay Bridge Setup v${VERSION}${NC}"
 echo -e "${DIM}  ──────────────────────────────────────────${NC}"
 echo ""
 
@@ -67,7 +67,8 @@ fi
 # --- Get SSH target normally if not using previous ---
 if [ -z "$TARGET" ]; then
     read -p "$(echo -e "${BLUE}?${NC} SSH target ${DIM}(user@host)${NC}: ")" TARGET
-    read -p "$(echo -e "${BLUE}?${NC} SSH password ${DIM}(or blank for key auth)${NC}: ")" PASSWORD
+    read -sp "$(echo -e "${BLUE}?${NC} SSH password ${DIM}(or blank for key auth)${NC}: ")" PASSWORD
+    echo ""
     read -p "$(echo -e "${BLUE}?${NC} SSH port ${DIM}[22]${NC}: ")" PORT
     PORT=${PORT:-22}
 fi
@@ -314,7 +315,7 @@ async def main():
         subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets"])
         import websockets
     print()
-    print("  \033[1m\033[38;5;208m🔥 OpenDeck Bridge (Native OpenSSH ControlMaster)\033[0m")
+    print("  \033[1m\033[38;5;208m🔥 OpenRelay Bridge (Native OpenSSH ControlMaster)\033[0m")
     print("  \033[2m────────────────────────────────────────────────────\033[0m")
     print(f"  WebSocket: ws://127.0.0.1:{WEBSOCKET_PORT}")
     if SSH_TARGET:
