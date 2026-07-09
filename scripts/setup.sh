@@ -1656,6 +1656,45 @@ echo ""
 cd "$BRIDGE_DIR"
 
 
+# ================================================================
+# Free WebSocket port (bridge.py only — don't kill random apps)
+# ================================================================
+
+if command -v lsof >/dev/null 2>&1; then
+
+    OLD_PID="$(lsof -t -i :8080 2>/dev/null || true)"
+
+    if [ -n "$OLD_PID" ]; then
+
+        # Verify it's actually an OpenRelay bridge, not some other app.
+        if ps -p "$OLD_PID" -o command= 2>/dev/null | grep -q "bridge.py"; then
+
+            echo -e "${YELLOW}  ⚠ Port 8080 is in use by an old bridge.${NC}"
+            echo -e "${DIM}  Stopping PID ${OLD_PID}...${NC}"
+
+            kill "$OLD_PID" 2>/dev/null || true
+            sleep 1
+
+            if kill -0 "$OLD_PID" 2>/dev/null; then
+                kill -9 "$OLD_PID" 2>/dev/null || true
+            fi
+
+        else
+
+            echo -e "${RED}  ❌ Port 8080 is in use by another process.${NC}"
+            echo -e "${DIM}  PID: ${OLD_PID} ($(ps -p "$OLD_PID" -o comm= 2>/dev/null || echo '?'))${NC}"
+            echo ""
+            echo -e "${RED}  Free the port and try again.${NC}"
+
+            exit 1
+
+        fi
+
+    fi
+
+fi
+
+
 # Password exists only in this process environment.
 #
 # It is never written to config.sh or another file.
