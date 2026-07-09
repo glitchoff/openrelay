@@ -16,7 +16,7 @@ BLUE='\033[1;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 BRIDGE_DIR="$HOME/.opendeck"
 CONFIG_FILE="$BRIDGE_DIR/config.sh"
 
@@ -185,26 +185,32 @@ async def handler(websocket):
                         pass
                     elif t == "list_dir":
                         path = msg["path"]
-                        python_cmd = (
-                            f"import os, json, stat; "
-                            f"path = os.path.expanduser({repr(path)}); "
-                            f"res = []; "
-                            f"try: "
-                            f"  for name in os.listdir(path): "
-                            f"    try: "
-                            f"      full = os.path.join(path, name); "
-                            f"      st = os.lstat(full); "
-                            f"      is_dir = stat.S_ISDIR(st.st_mode); "
-                            f"      is_link = stat.S_ISLNK(st.st_mode); "
-                            f"      size = st.st_size if not is_dir else 0; "
-                            f"      res.append({{'name': name, 'is_dir': is_dir, 'is_symlink': is_link, 'size': size}}); "
-                            f"    except: pass; "
-                            f"  print(json.dumps({{'status': 'success', 'entries': res}})); "
-                            f"except Exception as err: "
-                            f"  print(json.dumps({{'status': 'error', 'message': str(err)}}));"
-                        )
-                        
-                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c {repr(python_cmd)}")
+                        python_cmd = f"""
+import os, json, stat
+path = os.path.expanduser({repr(path)})
+res = []
+try:
+    for name in os.listdir(path):
+        try:
+            full = os.path.join(path, name)
+            st = os.lstat(full)
+            is_dir = stat.S_ISDIR(st.st_mode)
+            is_link = stat.S_ISLNK(st.st_mode)
+            size = st.st_size if not is_dir else 0
+            res.append({{
+                "name": name,
+                "is_dir": is_dir,
+                "is_symlink": is_link,
+                "size": size
+            }})
+        except Exception:
+            pass
+    print(json.dumps({{"status": "success", "entries": res}}))
+except Exception as err:
+    print(json.dumps({{"status": "error", "message": str(err)}}))
+"""
+                        escaped_cmd = python_cmd.replace("'", "'\\''")
+                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c '{escaped_cmd}'")
                         try:
                             data = json.loads(stdout.strip())
                             if data.get("status") == "success":
@@ -224,16 +230,17 @@ async def handler(websocket):
                         }))
                     elif t == "read_file":
                         path = msg["path"]
-                        python_cmd = (
-                            f"import os, base64; "
-                            f"path = os.path.expanduser({repr(path)}); "
-                            f"try: "
-                            f"  with open(path, 'rb') as f: "
-                            f"    print(base64.b64encode(f.read()).decode('utf-8')); "
-                            f"except Exception as err: "
-                            f"  print('ERROR:' + str(err));"
-                        )
-                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c {repr(python_cmd)}")
+                        python_cmd = f"""
+import os, base64
+path = os.path.expanduser({repr(path)})
+try:
+    with open(path, "rb") as f:
+        print(base64.b64encode(f.read()).decode("utf-8"))
+except Exception as err:
+    print("ERROR:" + str(err))
+"""
+                        escaped_cmd = python_cmd.replace("'", "'\\''")
+                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c '{escaped_cmd}'")
                         output = stdout.strip()
                         if output.startswith("ERROR:"):
                             await websocket.send(json.dumps({
@@ -262,18 +269,19 @@ async def handler(websocket):
                         path = msg["path"]
                         content = msg["content"]
                         content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
-                        python_cmd = (
-                            f"import os, base64; "
-                            f"path = os.path.expanduser({repr(path)}); "
-                            f"content = base64.b64decode({repr(content_b64)}); "
-                            f"try: "
-                            f"  with open(path, 'wb') as f: "
-                            f"    f.write(content); "
-                            f"  print('SUCCESS'); "
-                            f"except Exception as err: "
-                            f"  print('ERROR:' + str(err));"
-                        )
-                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c {repr(python_cmd)}")
+                        python_cmd = f"""
+import os, base64
+path = os.path.expanduser({repr(path)})
+content = base64.b64decode({repr(content_b64)})
+try:
+    with open(path, "wb") as f:
+        f.write(content)
+    print("SUCCESS")
+except Exception as err:
+    print("ERROR:" + str(err))
+"""
+                        escaped_cmd = python_cmd.replace("'", "'\\''")
+                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c '{escaped_cmd}'")
                         output = stdout.strip()
                         if output == "SUCCESS":
                             await websocket.send(json.dumps({
