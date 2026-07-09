@@ -6,6 +6,7 @@ import { useConnectionStore } from "@/store/connection-store";
 import { EditorPanel } from "./editor-panel";
 import { ExplorerPanel } from "./explorer-panel";
 import { TerminalPanel } from "./terminal-panel";
+import { TerminalOverlay } from "./terminal-overlay";
 import { HomeScreen } from "./home-screen";
 
 function FilesIcon() {
@@ -44,8 +45,12 @@ function CommandIcon() {
 
 export function Dashboard() {
   const projectPath = useConnectionStore((s) => s.projectPath);
+  const status = useConnectionStore((s) => s.status);
+  const reconnect = useConnectionStore((s) => s.reconnect);
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
+  const terminalOpen = useUiStore((s) => s.terminalOpen);
+  const setTerminalOpen = useUiStore((s) => s.setTerminalOpen);
 
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(true);
@@ -66,6 +71,8 @@ export function Dashboard() {
     return <HomeScreen />;
   }
 
+  const disconnected = status !== "connected" && projectPath !== null;
+
   if (!mounted) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-black">
@@ -84,9 +91,6 @@ export function Dashboard() {
           </div>
           <div className={`absolute inset-0 ${activeView === "editor" ? "z-10" : "z-0 invisible"}`}>
             <EditorPanel />
-          </div>
-          <div className={`absolute inset-0 ${activeView === "terminal" ? "z-10" : "z-0 invisible"}`}>
-            <TerminalPanel />
           </div>
         </div>
 
@@ -127,9 +131,9 @@ export function Dashboard() {
           </button>
 
           <button
-            onClick={() => setActiveView("terminal")}
+            onClick={() => setTerminalOpen(true)}
             className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
-              activeView === "terminal"
+              terminalOpen
                 ? "text-orange-500"
                 : "text-zinc-500 hover:text-zinc-300"
             }`}
@@ -138,6 +142,9 @@ export function Dashboard() {
             <span className="text-[9px] font-medium">Terminal</span>
           </button>
         </div>
+
+        {/* Terminal overlay — floats above everything */}
+        <TerminalOverlay />
 
         {/* Command palette */}
         {commandOpen && (
@@ -155,14 +162,48 @@ export function Dashboard() {
         <ExplorerPanel />
       </div>
 
-      {/* Main split: Editor (top) and Terminal (bottom) */}
-      <div className="flex-1 flex flex-col h-full min-w-0 divide-y divide-zinc-900">
+      {/* Main split: Editor + optional terminal drawer */}
+      <div className="flex-1 flex flex-col h-full min-w-0">
+        {/* Editor toolbar */}
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-[#0f0f0f] border-b border-zinc-900 shrink-0">
+          <div className="flex-1" />
+          <button
+            onClick={() => setTerminalOpen(!terminalOpen)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+              terminalOpen
+                ? "bg-zinc-800 text-zinc-200"
+                : "text-zinc-500 hover:text-zinc-400"
+            }`}
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="size-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 17l4-4-4-4M12 19h8" />
+            </svg>
+            Terminal
+          </button>
+        </div>
+
+        {disconnected && (
+          <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-red-950/40 border-b border-red-900/50 text-xs text-red-300">
+            <span className="size-2 rounded-full bg-red-500 animate-pulse shrink-0" />
+            <span className="flex-1">Connection lost</span>
+            <button
+              onClick={() => reconnect()}
+              className="px-2.5 py-1 rounded bg-red-900/60 hover:bg-red-800/60 text-red-200 transition-colors font-medium"
+            >
+              Reconnect
+            </button>
+          </div>
+        )}
+
         <div className="flex-1 min-h-0 relative">
           <EditorPanel />
         </div>
-        <div className="h-80 shrink-0 bg-zinc-950/20 relative">
-          <TerminalPanel />
-        </div>
+
+        {terminalOpen && (
+          <div className="h-80 shrink-0 bg-zinc-950/20 border-t border-zinc-900 relative">
+            <TerminalPanel />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -203,8 +244,9 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
 
   function handleSelect(id: string) {
     const setActiveView = useUiStore.getState().setActiveView;
+    const setTerminalOpen = useUiStore.getState().setTerminalOpen;
     switch (id) {
-      case "go-terminal": setActiveView("terminal"); break;
+      case "go-terminal": setTerminalOpen(true); break;
       case "go-explorer": setActiveView("explorer"); break;
       case "toggle-wrap": {
         const v = !getSettings().wrap;

@@ -15,6 +15,7 @@ interface TerminalState {
   setActiveTerminal: (id: string) => void;
   setTitle: (id: string, title: string) => void;
   setPtyId: (id: string, ptyId: number) => void;
+  clearPtys: () => void;
 }
 
 let termCounter = 0;
@@ -54,5 +55,10 @@ export const useTerminalStore = create<TerminalState>((set) => ({
   setPtyId: (id, ptyId) =>
     set((s) => ({
       terminals: s.terminals.map((t) => (t.id === id ? { ...t, ptyId } : t)),
+    })),
+
+  clearPtys: () =>
+    set((s) => ({
+      terminals: s.terminals.map((t) => ({ ...t, ptyId: null })),
     })),
 }));

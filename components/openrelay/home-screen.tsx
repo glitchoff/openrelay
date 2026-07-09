@@ -311,7 +311,7 @@ export function HomeScreen() {
   const port = useConnectionStore((s) => s.port);
   const disconnect = useConnectionStore((s) => s.disconnect);
   const setProjectPath = useConnectionStore((s) => s.setProjectPath);
-  const setActiveView = useUiStore((s) => s.setActiveView);
+  const setTerminalOpen = useUiStore((s) => s.setTerminalOpen);
 
   const [recentProjects, setRecentProjects] = useState<string[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -402,7 +402,7 @@ export function HomeScreen() {
             <Button
               onClick={() => {
                 setProjectPath("~");
-                setActiveView("terminal");
+                setTerminalOpen(true);
               }}
               className="w-full h-14 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 font-semibold rounded-2xl gap-2 flex items-center justify-center transition-all border border-zinc-700"
             >

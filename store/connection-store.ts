@@ -1,10 +1,18 @@
 import { create } from "zustand";
 import type { IncomingMsg, OutgoingMsg, FileEntry } from "@/lib/types";
+import { useTerminalStore } from "@/store/terminal-store";
 
 interface Pending {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
   path: string;
+}
+
+interface ConnectParams {
+  host: string;
+  port: number;
+  password?: string;
+  path?: string;
 }
 
 interface ConnectionState {
@@ -16,9 +24,12 @@ interface ConnectionState {
   _pathToId: Map<string, string>; // path → latest req id (for old bridges)
   _nextId: number;
   onStdout: ((data: string) => void) | null;
+  _lastConnect: ConnectParams | null;
+  _reconnectTimer: ReturnType<typeof setTimeout> | null;
 
-  connect: (host: string, port: number, password?: string) => void;
+  connect: (host: string, port: number, password?: string, path?: string) => void;
   disconnect: () => void;
+  reconnect: () => void;
   send: (msg: OutgoingMsg) => void;
   setOnStdout: (cb: ((data: string) => void) | null) => void;
 
@@ -52,9 +63,20 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   projectPath: null,
   setProjectPath: (path) => set({ projectPath: path }),
   connectionError: null,
+  _lastConnect: null,
+  _reconnectTimer: null,
 
-  connect: (host: string, port: number, password?: string) => {
+  connect: (host: string, port: number, password?: string, path?: string) => {
     const { status, host: curHost, port: curPort } = get();
+
+    // Cancel any pending reconnect
+    const timer = get()._reconnectTimer;
+    if (timer) clearTimeout(timer);
+    set({ _reconnectTimer: null });
+
+    // Save params for reconnect
+    set({ _lastConnect: { host, port, password, path } });
+
     // Reuse existing connection if already live or connecting to same target
     if (
       (status === "connected" || status === "connecting") &&
@@ -62,18 +84,22 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       curPort === port
     ) return;
 
+    // Clear stale PTY ids so they get recreated on reconnect
+    useTerminalStore.getState().clearPtys();
+
     const old = get().ws;
     if (old) old.close();
 
     const ws = new WebSocket(`ws://${host}:${port}`);
     // Store ws immediately so onclose/onerror identity guards work
     // even if the connection fails before onopen fires
-    set({ status: "connecting", host, port, ws, connectionError: null });
+    set({ status: "connecting", host, port, ws, connectionError: null, _initialPtyId: null });
 
     ws.onopen = () => {
-      set({ status: "connected" });
+      set({ status: "connected", connectionError: null });
       const msg: any = { type: "connect" };
       if (password) msg.password = password;
+      if (path) msg.path = path;
       ws.send(JSON.stringify(msg));
     };
 
@@ -152,24 +178,44 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     ws.onclose = () => {
       // Only reset if this WS is still the active connection
       if (get().ws === ws) {
-        set({ status: "disconnected", ws: null, pending: new Map(), projectPath: null, _initialPtyId: null });
+        // Keep projectPath so dashboard doesn't vanish — show disconnected state instead
+        set({ status: "disconnected", ws: null, pending: new Map(), _initialPtyId: null });
+        // Auto-reconnect after a short delay
+        const last = get()._lastConnect;
+        if (last && get().projectPath) {
+          const timer = setTimeout(() => {
+            if (get().status === "disconnected") {
+              get().connect(last.host, last.port, last.password, last.path);
+            }
+          }, 2000);
+          set({ _reconnectTimer: timer });
+        }
       }
     };
 
     ws.onerror = () => {
       if (get().ws === ws) {
-        set({ status: "disconnected", projectPath: null, connectionError: "WebSocket connection failed", _initialPtyId: null });
+        set({ status: "disconnected", connectionError: "WebSocket connection failed", _initialPtyId: null });
       }
     };
   },
 
   disconnect: () => {
+    const timer = get()._reconnectTimer;
+    if (timer) clearTimeout(timer);
     const { ws } = get();
     if (ws) {
       ws.send(JSON.stringify({ type: "disconnect" }));
       ws.close();
     }
-    set({ status: "disconnected", ws: null, pending: new Map(), projectPath: null });
+    set({ status: "disconnected", ws: null, pending: new Map(), _reconnectTimer: null, _lastConnect: null });
+  },
+
+  reconnect: () => {
+    const last = get()._lastConnect;
+    if (last) {
+      get().connect(last.host, last.port, last.password, last.path);
+    }
   },
 
   send: (msg: OutgoingMsg) => {

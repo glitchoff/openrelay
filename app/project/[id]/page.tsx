@@ -41,7 +41,7 @@ export default function ProjectPage() {
   // Connect on mount
   useEffect(() => {
     if (!project) return;
-    connect(project.host, project.port);
+    connect(project.host, project.port, undefined, project.path);
   }, [project?.id]);
 
   // Once connected, set projectPath and mark ready
@@ -85,6 +85,14 @@ export default function ProjectPage() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, []);
+
+  // Block swipe-back gestures on mobile while in project
+  useEffect(() => {
+    if (!ready) return;
+    const prev = document.body.style.overscrollBehavior;
+    document.body.style.overscrollBehavior = "none";
+    return () => { document.body.style.overscrollBehavior = prev; };
+  }, [ready]);
 
   // custom dialog for in-app back navigation
   useEffect(() => {

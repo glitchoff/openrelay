@@ -4,17 +4,21 @@ type Panel = "explorer" | "terminal";
 
 interface UiState {
   openPanels: Panel[];
-  activeView: "editor" | "explorer" | "terminal";
+  activeView: "editor" | "explorer";
+  terminalOpen: boolean;
 
   togglePanel: (panel: Panel) => void;
   openPanel: (panel: Panel) => void;
   closePanel: (panel: Panel) => void;
   setActiveView: (view: UiState["activeView"]) => void;
+  setTerminalOpen: (open: boolean) => void;
+  toggleTerminal: () => void;
 }
 
 export const useUiStore = create<UiState>((set) => ({
   openPanels: [],
   activeView: "editor",
+  terminalOpen: false,
 
   togglePanel: (panel) =>
     set((s) => ({
@@ -34,4 +38,8 @@ export const useUiStore = create<UiState>((set) => ({
     })),
 
   setActiveView: (view) => set({ activeView: view }),
+
+  setTerminalOpen: (open) => set({ terminalOpen: open }),
+
+  toggleTerminal: () => set((s) => ({ terminalOpen: !s.terminalOpen })),
 }));

@@ -537,6 +537,9 @@ class OpenRelayConnection:
             return
 
 
+        # Shells expect \b for backspace, not \x7f (DEL)
+        data = data.replace("\x7f", "\b")
+
         shell.stdin.write(
             data.encode(
                 "utf-8",
@@ -1337,8 +1340,9 @@ async def websocket_reader(
                 })
 
 
-                # Start reader AFTER pty_created so client
-                # wires callback before any stdout arrives
+                # Brief delay so client wires stdout callback
+                # before any data arrives
+                await asyncio.sleep(0.05)
 
                 task = asyncio.create_task(
 
@@ -1606,6 +1610,10 @@ async def handler(websocket):
         )
 
 
+        # Initial shell cwd from connect message, if provided
+        initial_cwd = message.get("path") or message.get("cwd")
+
+
         # --------------------------------------------------------
         # Spawn initial PTY 0
         # --------------------------------------------------------
@@ -1613,12 +1621,16 @@ async def handler(websocket):
         initial_pty_id = await connection.start_shell(
             cols=cols,
             rows=rows,
+            cwd=initial_cwd,
         )
 
         await connection.send({
             "type": "pty_created",
             "pty_id": initial_pty_id,
         })
+
+        # Brief delay so client wires stdout callback before any data arrives
+        await asyncio.sleep(0.05)
 
         shell_task = asyncio.create_task(
             connection.read_shell(
@@ -1648,43 +1660,27 @@ async def handler(websocket):
         )
 
 
-        done, pending = await asyncio.wait(
+        # Wait for WebSocket reader — the connection lives as long
+        # as the WebSocket is open, even if the initial shell exits
+        try:
 
-            {
+            await websocket_task
+
+        except Exception:
+
+            raise
+
+        finally:
+
+            shell_task.cancel()
+
+            await asyncio.gather(
+
                 shell_task,
-                websocket_task,
-            },
 
-            return_when=asyncio.FIRST_COMPLETED,
+                return_exceptions=True,
 
-        )
-
-
-        for task in pending:
-
-            task.cancel()
-
-
-        await asyncio.gather(
-
-            *pending,
-
-            return_exceptions=True,
-
-        )
-
-
-        for task in done:
-
-            if task.cancelled():
-                continue
-
-
-            exception = task.exception()
-
-
-            if exception:
-                raise exception
+            )
 
 
     except asyncio.TimeoutError:

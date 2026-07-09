@@ -3,7 +3,7 @@
 local-bridge.py — OpenRelay local test bridge (Windows/Mac/Linux)
 
 No SSH. Serves the local filesystem and spawns a local shell.
-Same WebSocket protocol as the Termux bridge.
+Same WebSocket protocol as the Termux bridge (setup.sh).
 
 Usage:
     python scripts/local-bridge.py [--port 8080] [--host 127.0.0.1]
@@ -13,6 +13,7 @@ Requirements:
 """
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -75,20 +76,48 @@ async def handler(websocket):
 
     try:
         # ── handshake: wait for { type: "connect" } ────────────────────────
-        raw = await websocket.recv()
-        msg = json.loads(raw)
+        try:
+            raw = await asyncio.wait_for(websocket.recv(), timeout=30)
+        except asyncio.TimeoutError:
+            return
+
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            await websocket.send(json.dumps({
+                "type": "error",
+                "message": "Invalid JSON message",
+            }))
+            return
+
         if msg.get("type") != "connect":
             await websocket.send(json.dumps({
                 "type": "error",
-                "message": "First message must be { type: 'connect' }"
+                "message": "First message must be connect",
             }))
             return
+
+        # Send connecting message (protocol compat with setup.sh)
+        await websocket.send(json.dumps({
+            "type": "connecting",
+            "host": "localhost",
+            "port": args.port,
+        }))
 
         await websocket.send(json.dumps({
             "type": "connected",
             "host": "localhost",
             "port": 0,
         }))
+
+        # Parse cols/rows from connect message (protocol compat)
+        cols = msg.get("cols", 80)
+        rows = msg.get("rows", 24)
+        try:
+            cols = max(1, min(int(cols), 1000))
+            rows = max(1, min(int(rows), 1000))
+        except (TypeError, ValueError):
+            cols, rows = 80, 24
 
         async def spawn_pty(cwd=None):
             nonlocal pty_counter
@@ -108,16 +137,32 @@ async def handler(websocket):
             new_id = pty_counter
             ptys[new_id] = proc
 
+            # Attempt to set terminal size on supported platforms
+            if not IS_WINDOWS:
+                try:
+                    proc.terminal_size(cols, rows)
+                except Exception:
+                    pass
+
             async def read_pty(pty_id):
                 try:
                     while True:
-                        data = await proc.stdout.read(4096)
+                        data = await proc.stdout.read(8192)
                         if not data:
                             break
+                        # On Windows, PowerShell outputs UTF-16LE when piped.
+                        # Try UTF-8 first, then fall back to UTF-16LE for Windows.
+                        try:
+                            text = data.decode("utf-8")
+                        except UnicodeDecodeError:
+                            try:
+                                text = data.decode("utf-16-le")
+                            except UnicodeDecodeError:
+                                text = data.decode("utf-8", errors="replace")
                         await websocket.send(json.dumps({
                             "type": "stdout",
                             "pty_id": pty_id,
-                            "data": data.decode("utf-8", errors="replace"),
+                            "data": text,
                         }))
                 except Exception:
                     pass
@@ -132,7 +177,8 @@ async def handler(websocket):
                 "type": "pty_created",
                 "pty_id": new_id,
             }))
-            # Start reader AFTER pty_created so client wires callback first
+            # Brief delay so client can wire the stdout callback before any data arrives
+            await asyncio.sleep(0.05)
             task = asyncio.create_task(read_pty(new_id))
             reader_tasks.append(task)
             return new_id
@@ -142,7 +188,11 @@ async def handler(websocket):
             async for raw in websocket:
                 try:
                     msg = json.loads(raw)
-                except Exception:
+                except json.JSONDecodeError:
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "message": "Invalid JSON message",
+                    }))
                     continue
 
                 t      = msg.get("type")
@@ -152,14 +202,29 @@ async def handler(websocket):
                 if t == "stdin":
                     proc = ptys.get(pty_id)
                     if proc and proc.stdin:
-                        proc.stdin.write(msg["data"].encode("utf-8"))
+                        data = msg["data"]
+                        # Shells expect \b (0x08) for backspace, not \x7f (DEL)
+                        data = data.replace("\x7f", "\b")
+                        proc.stdin.write(data.encode("utf-8", errors="replace"))
                         await proc.stdin.drain()
 
                 elif t == "resize":
-                    pass
+                    # Note: local subprocess has no PTY, so resize is best-effort
+                    proc = ptys.get(pty_id)
+                    if proc:
+                        try:
+                            proc.terminal_size(cols, rows)
+                        except Exception:
+                            pass
 
                 elif t == "create_pty":
-                    await spawn_pty(msg.get("cwd"))
+                    try:
+                        await spawn_pty(msg.get("cwd"))
+                    except Exception as err:
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "message": f"Failed to create PTY: {err}",
+                        }))
 
                 elif t == "close_pty":
                     pid = msg.get("pty_id")
@@ -187,35 +252,42 @@ async def handler(websocket):
                             "type":    "error",
                             "path":    path,
                             "id":      req_id,
-                            "message": f"list_dir failed: {err}",
+                            "message": f"Failed to list directory: {err}",
                         }))
 
                 elif t == "read_file":
                     path = msg.get("path", "")
                     try:
                         real = expand(path)
-                        with open(real, "r", encoding="utf-8", errors="replace") as f:
+                        with open(real, "rb") as f:
                             content = f.read()
+                        content_b64 = base64.b64encode(content).decode("ascii")
                         await websocket.send(json.dumps({
                             "type":    "read_file_result",
                             "path":    path,
                             "id":      req_id,
-                            "content": content,
+                            "content_b64": content_b64,
                         }))
                     except Exception as err:
                         await websocket.send(json.dumps({
                             "type":    "error",
                             "path":    path,
                             "id":      req_id,
-                            "message": f"read_file failed: {err}",
+                            "message": f"Failed to read file: {err}",
                         }))
 
                 elif t == "write_file":
-                    path    = msg.get("path", "")
-                    content = msg.get("content", "")
+                    path = msg.get("path", "")
                     try:
+                        # Binary-safe: accept content_b64 or plain content
+                        if isinstance(msg.get("content_b64"), str):
+                            content = base64.b64decode(msg["content_b64"], validate=True)
+                        elif isinstance(msg.get("content"), str):
+                            content = msg["content"].encode("utf-8")
+                        else:
+                            raise ValueError("Missing file content")
                         real = expand(path)
-                        with open(real, "w", encoding="utf-8") as f:
+                        with open(real, "wb") as f:
                             f.write(content)
                         await websocket.send(json.dumps({
                             "type":    "write_file_result",
@@ -228,7 +300,7 @@ async def handler(websocket):
                             "type":    "error",
                             "path":    path,
                             "id":      req_id,
-                            "message": f"write_file failed: {err}",
+                            "message": f"Failed to write file: {err}",
                         }))
 
                 elif t == "mkdir":
@@ -247,7 +319,7 @@ async def handler(websocket):
                             "type":    "error",
                             "path":    path,
                             "id":      req_id,
-                            "message": f"mkdir failed: {err}",
+                            "message": f"Failed to create directory: {err}",
                         }))
 
                 elif t == "rename":
@@ -267,15 +339,24 @@ async def handler(websocket):
                             "type":    "error",
                             "path":    old_path,
                             "id":      req_id,
-                            "message": f"rename failed: {err}",
+                            "message": f"Failed to rename: {err}",
                         }))
 
                 elif t == "disconnect":
                     break
 
+                else:
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "id": req_id,
+                        "message": f"Unknown message type: {t}",
+                    }))
+
+        # Initial shell cwd from connect message, if provided
+        initial_cwd = msg.get("path") or msg.get("cwd")
+
         # Spawn initial PTY 0
-        initial_pty_id = await spawn_pty()
-        # pty_created is already sent by spawn_pty
+        initial_pty_id = await spawn_pty(initial_cwd)
 
         await handle_messages()
 
@@ -308,7 +389,14 @@ async def main():
     print("  \033[2mPress Ctrl-C to stop\033[0m")
     print()
 
-    async with websockets.serve(handler, args.host, args.port):
+    async with websockets.serve(
+        handler,
+        args.host,
+        args.port,
+        ping_interval=20,
+        ping_timeout=20,
+        max_size=32 * 1024 * 1024,
+    ):
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
