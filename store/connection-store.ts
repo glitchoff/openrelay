@@ -97,7 +97,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
             settle(resolveKey(msg.id, msg.path), (p) => p.resolve(msg.entries));
             break;
           case "read_file_result":
-            settle(resolveKey(msg.id, msg.path), (p) => p.resolve(msg.content));
+            settle(resolveKey(msg.id, msg.path), (p) => {
+              const raw = atob(msg.content_b64);
+              const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+              const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+              p.resolve(text);
+            });
             break;
           case "write_file_result":
             settle(resolveKey(msg.id, msg.path), (p) => p.resolve(undefined));

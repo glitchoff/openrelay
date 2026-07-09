@@ -76,7 +76,7 @@ export interface ListDirResult {
 export interface ReadFileResult {
   type: "read_file_result";
   path: string;
-  content: string;
+  content_b64: string;
   id?: string;
 }
 

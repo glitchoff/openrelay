@@ -232,21 +232,12 @@ async def handler(websocket):
                         stdout, stderr, code = await _ssh(sh_cmd)
                         output = stdout.strip()
                         if code == 0 and output:
-                            try:
-                                content = base64.b64decode(output).decode('utf-8', errors='replace')
-                                await websocket.send(json.dumps({
-                                    "type": "read_file_result",
-                                    "path": path,
-                                    "id": req_id,
-                                    "content": content
-                                }))
-                            except Exception as err:
-                                await websocket.send(json.dumps({
-                                    "type": "error",
-                                    "path": path,
-                                    "id": req_id,
-                                    "message": f"Failed to decode file: {str(err)}"
-                                }))
+                            await websocket.send(json.dumps({
+                                "type": "read_file_result",
+                                "path": path,
+                                "id": req_id,
+                                "content_b64": output
+                            }))
                         else:
                             await websocket.send(json.dumps({
                                 "type": "error",
