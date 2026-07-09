@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useConnectionStore } from "@/store/connection-store";
 import { useEditorStore, getSavedSession } from "@/store/editor-store";
 import { Dashboard } from "@/components/openrelay/dashboard";
-import { getProject } from "@/lib/projects";
+import { getProject, type Project } from "@/lib/projects";
 import {
   Dialog,
   DialogContent,
@@ -24,25 +24,25 @@ export default function ProjectPage() {
   const status = useConnectionStore((s) => s.status);
   const connectionError = useConnectionStore((s) => s.connectionError);
   const setProjectPath = useConnectionStore((s) => s.setProjectPath);
-  const [project, setProject] = useState(() => getProject(id));
+  const [project, setProject] = useState<Project | undefined>(undefined);
   const [ready, setReady] = useState(false);
   const connectedRef = useRef(false);
   const restoredRef = useRef(false);
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const pendingNavigationRef = useRef<(() => void) | null>(null);
 
-  // Redirect if project not found
+  // Load project from localStorage on mount (not in SSR)
   useEffect(() => {
-    if (!project) {
-      router.replace("/dashboard");
-    }
-  }, [project, router]);
+    const p = getProject(id);
+    setProject(p);
+    if (!p) router.replace("/dashboard");
+  }, [id]);
 
   // Connect on mount
   useEffect(() => {
     if (!project) return;
     connect(project.host, project.port, undefined, project.path);
-  }, [project?.id]);
+  }, [project?.id, project?.host, project?.port]);
 
   // Once connected, set projectPath and mark ready
   useEffect(() => {

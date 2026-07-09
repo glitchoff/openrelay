@@ -3,10 +3,11 @@
 import { useEffect, useState, useRef } from "react";
 import { useUiStore } from "@/store/ui-store";
 import { useConnectionStore } from "@/store/connection-store";
+import { useTerminalStore } from "@/store/terminal-store";
 import { EditorPanel } from "./editor-panel";
 import { ExplorerPanel } from "./explorer-panel";
 import { TerminalPanel } from "./terminal-panel";
-import { TerminalOverlay } from "./terminal-overlay";
+import { TabSwitcher } from "./tab-switcher";
 import { HomeScreen } from "./home-screen";
 
 function FilesIcon() {
@@ -29,8 +30,8 @@ function CodeIcon() {
 
 function TerminalIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className="size-5">
-      <path d="M4 17l4-4-4-4M12 19h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox="0 0 24 24" fill="none" className="size-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 17l4-4-4-4M12 19h8" />
     </svg>
   );
 }
@@ -49,12 +50,12 @@ export function Dashboard() {
   const reconnect = useConnectionStore((s) => s.reconnect);
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
-  const terminalOpen = useUiStore((s) => s.terminalOpen);
-  const setTerminalOpen = useUiStore((s) => s.setTerminalOpen);
+  const terminalCount = useTerminalStore((s) => s.terminals.length);
 
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(true);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [tabSwitcherOpen, setTabSwitcherOpen] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -92,12 +93,15 @@ export function Dashboard() {
           <div className={`absolute inset-0 ${activeView === "editor" ? "z-10" : "z-0 invisible"}`}>
             <EditorPanel />
           </div>
+          <div className={`absolute inset-0 ${activeView === "terminal" ? "z-10" : "z-0 invisible"}`}>
+            <TerminalPanel />
+          </div>
         </div>
 
         {/* Bottom dock */}
         <div className="flex items-center justify-around px-2 py-1.5 bg-[#0f0f0f] border-t border-zinc-900 shrink-0 safe-area-bottom">
           <button
-            onClick={() => setActiveView("explorer")}
+            onClick={() => setActiveView(activeView === "explorer" ? "editor" : "explorer")}
             className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
               activeView === "explorer"
                 ? "text-orange-500"
@@ -106,18 +110,6 @@ export function Dashboard() {
           >
             <FilesIcon />
             <span className="text-[9px] font-medium">Files</span>
-          </button>
-
-          <button
-            onClick={() => setActiveView("editor")}
-            className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
-              activeView === "editor"
-                ? "text-orange-500"
-                : "text-zinc-500 hover:text-zinc-300"
-            }`}
-          >
-            <CodeIcon />
-            <span className="text-[9px] font-medium">Editor</span>
           </button>
 
           <button
@@ -131,20 +123,40 @@ export function Dashboard() {
           </button>
 
           <button
-            onClick={() => setTerminalOpen(true)}
+            onClick={() => setActiveView("editor")}
             className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
-              terminalOpen
+              activeView === "editor"
+                ? "text-orange-500"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <CodeIcon />
+            <span className="text-[9px] font-medium">Code</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveView("terminal");
+              setTabSwitcherOpen(true);
+            }}
+            className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors relative ${
+              activeView === "terminal"
                 ? "text-orange-500"
                 : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
             <TerminalIcon />
-            <span className="text-[9px] font-medium">Terminal</span>
+            <span className="text-[9px] font-medium">Tabs</span>
+            {terminalCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 size-4 rounded-full bg-orange-500 text-[8px] font-bold text-black flex items-center justify-center">
+                {terminalCount > 9 ? "9+" : terminalCount}
+              </span>
+            )}
           </button>
         </div>
 
-        {/* Terminal overlay — floats above everything */}
-        <TerminalOverlay />
+        {/* Tab switcher overlay */}
+        <TabSwitcher open={tabSwitcherOpen} onClose={() => setTabSwitcherOpen(false)} />
 
         {/* Command palette */}
         {commandOpen && (
@@ -162,26 +174,8 @@ export function Dashboard() {
         <ExplorerPanel />
       </div>
 
-      {/* Main split: Editor + optional terminal drawer */}
+      {/* Main split: content (editor or terminal) */}
       <div className="flex-1 flex flex-col h-full min-w-0">
-        {/* Editor toolbar */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-[#0f0f0f] border-b border-zinc-900 shrink-0">
-          <div className="flex-1" />
-          <button
-            onClick={() => setTerminalOpen(!terminalOpen)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-              terminalOpen
-                ? "bg-zinc-800 text-zinc-200"
-                : "text-zinc-500 hover:text-zinc-400"
-            }`}
-          >
-            <svg viewBox="0 0 24 24" fill="none" className="size-3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 17l4-4-4-4M12 19h8" />
-            </svg>
-            Terminal
-          </button>
-        </div>
-
         {disconnected && (
           <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-red-950/40 border-b border-red-900/50 text-xs text-red-300">
             <span className="size-2 rounded-full bg-red-500 animate-pulse shrink-0" />
@@ -196,15 +190,12 @@ export function Dashboard() {
         )}
 
         <div className="flex-1 min-h-0 relative">
-          <EditorPanel />
+          <DesktopContent />
         </div>
-
-        {terminalOpen && (
-          <div className="h-80 shrink-0 bg-zinc-950/20 border-t border-zinc-900 relative">
-            <TerminalPanel />
-          </div>
-        )}
       </div>
+
+      {/* Tab switcher overlay (desktop) */}
+      <TabSwitcher open={tabSwitcherOpen} onClose={() => setTabSwitcherOpen(false)} />
     </div>
   );
 }
@@ -214,6 +205,21 @@ function getSettings() {
   try { wrap = localStorage.getItem("openrelay:wrap") !== "false"; } catch {}
   try { autosave = localStorage.getItem("openrelay:autosave") === "true"; } catch {}
   return { wrap, autosave };
+}
+
+function DesktopContent() {
+  const activeView = useUiStore((s) => s.activeView);
+
+  return (
+    <>
+      <div className={`absolute inset-0 ${activeView === "editor" ? "z-10" : "z-0 invisible"}`}>
+        <EditorPanel />
+      </div>
+      <div className={`absolute inset-0 ${activeView === "terminal" ? "z-10" : "z-0 invisible"}`}>
+        <TerminalPanel />
+      </div>
+    </>
+  );
 }
 
 function CommandPalette({ onClose }: { onClose: () => void }) {
@@ -244,9 +250,12 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
 
   function handleSelect(id: string) {
     const setActiveView = useUiStore.getState().setActiveView;
-    const setTerminalOpen = useUiStore.getState().setTerminalOpen;
+    const addTerminal = useTerminalStore.getState().addTerminal;
     switch (id) {
-      case "go-terminal": setTerminalOpen(true); break;
+      case "go-terminal":
+        addTerminal();
+        useUiStore.getState().setActiveView("terminal");
+        break;
       case "go-explorer": setActiveView("explorer"); break;
       case "toggle-wrap": {
         const v = !getSettings().wrap;

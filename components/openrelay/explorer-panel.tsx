@@ -85,8 +85,8 @@ export function ExplorerPanel() {
   const openFile = useEditorStore((s) => s.openFile);
   const openFiles = useEditorStore((s) => s.openFiles);
   const activeFile = useEditorStore((s) => s.activeFile);
-  const setActiveFile = useEditorStore((s) => s.setActiveFile);
   const closeFile = useEditorStore((s) => s.closeFile);
+  const setActiveFile = useEditorStore((s) => s.setActiveFile);
   const status = useConnectionStore((s) => s.status);
   const projectPath = useConnectionStore((s) => s.projectPath);
   const setActiveView = useUiStore((s) => s.setActiveView);
@@ -353,7 +353,6 @@ export function ExplorerPanel() {
     );
   }
 
-  const openFilesList = Object.values(openFiles);
 
   return (
     <div className="flex flex-col h-full select-none">
@@ -418,40 +417,43 @@ export function ExplorerPanel() {
               Open Files
             </span>
             <span className="text-[10px] text-zinc-600 tabular-nums ml-1">
-              {openFilesList.length}
+              {Object.keys(openFiles).length}
             </span>
           </button>
 
           {!openFilesCollapsed && (
             <div className="pb-1">
-              {openFilesList.length === 0 ? (
+              {Object.keys(openFiles).length === 0 ? (
                 <div className="text-[11px] text-zinc-600 italic px-4 py-2 select-none">
                   No open files
                 </div>
               ) : (
-                openFilesList.map((file) => {
-                  const isActive = activeFile === file.path;
+                Object.values(openFiles).map((f) => {
+                  const isActive = activeFile === f.path;
                   return (
                     <div
-                      key={file.path}
+                      key={f.path}
                       className={cn(
                         "w-full flex items-center gap-1.5 px-3 py-1 min-h-[32px] text-sm text-left",
                         "hover:bg-zinc-800/40 active:bg-zinc-800/60 transition-colors select-none group cursor-pointer",
                         isActive && "bg-zinc-800/30 text-orange-400"
                       )}
-                      onClick={() => setActiveFile(file.path)}
+                      onClick={() => {
+                        setActiveFile(f.path);
+                        setActiveView("editor");
+                      }}
                     >
                       <FileIcon />
                       <span className="flex-1 truncate text-[13px] text-zinc-300 min-w-0">
-                        {file.path.split("/").pop()}
+                        {f.path.split("/").pop()}
                       </span>
-                      {file.dirty && (
+                      {f.dirty && (
                         <span className="size-1.5 rounded-full bg-yellow-500 shrink-0" />
                       )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          closeFile(file.path);
+                          closeFile(f.path);
                         }}
                         className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-zinc-700/60 text-zinc-500 hover:text-zinc-300 transition-all shrink-0"
                       >

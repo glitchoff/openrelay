@@ -4,7 +4,7 @@ type Panel = "explorer" | "terminal";
 
 interface UiState {
   openPanels: Panel[];
-  activeView: "editor" | "explorer";
+  activeView: "editor" | "explorer" | "terminal";
   terminalOpen: boolean;
 
   togglePanel: (panel: Panel) => void;
