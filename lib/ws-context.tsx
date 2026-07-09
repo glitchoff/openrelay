@@ -76,7 +76,10 @@ export function WsProvider({ children }: { children: ReactNode }) {
           case "read_file_result": {
             const resolver = pendingResolvers.current[msg.path];
             if (resolver) {
-              resolver.resolve(msg.content);
+              const raw = atob(msg.content_b64);
+              const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+              const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+              resolver.resolve(text);
               delete pendingResolvers.current[msg.path];
             }
             break;
