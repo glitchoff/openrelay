@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/env python3
-"""OpenDeck Bridge — WebSocket server in Termux that proxies to SSH via asyncssh."""
+"""OpenRelay Bridge — WebSocket server in Termux that proxies to SSH via asyncssh."""
 
 import asyncio
 import json
@@ -8,9 +8,9 @@ import sys
 import stat
 import subprocess
 
-WEBSOCKET_PORT = int(os.environ.get("OPENDECK_PORT", "8080"))
-SSH_TARGET = os.environ.get("OPENDECK_SSH_TARGET", "")
-SSH_PORT = int(os.environ.get("OPENDECK_SSH_PORT", "22"))
+WEBSOCKET_PORT = int(os.environ.get("OPENRELAY_PORT", "8080"))
+SSH_TARGET = os.environ.get("OPENRELAY_SSH_TARGET", "")
+SSH_PORT = int(os.environ.get("OPENRELAY_SSH_PORT", "22"))
 SSHPASS = os.environ.get("SSHPASS", "")
 
 
@@ -239,7 +239,7 @@ async def main():
         import asyncssh
 
     print()
-    print("  \033[1m\033[38;5;208m🔥 OpenDeck Bridge (SFTP Multiplexed)\033[0m")
+    print("  \033[1m\033[38;5;208m🔥 OpenRelay Bridge (SFTP Multiplexed)\033[0m")
     print("  \033[2m──────────────────────────────────────────\033[0m")
     print(f"  WebSocket: ws://127.0.0.1:{WEBSOCKET_PORT}")
 

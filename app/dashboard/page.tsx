@@ -3,7 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, Suspense } from "react";
 import { useConnectionStore } from "@/store/connection-store";
-import { Dashboard } from "@/components/opendeck/dashboard";
+import { Dashboard } from "@/components/openrelay/dashboard";
 
 function DashboardContent() {
   const searchParams = useSearchParams();

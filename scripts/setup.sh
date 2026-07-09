@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# OpenDeck Setup — run this in Termux to install & start the bridge
+# OpenRelay Setup — run this in Termux to install & start the bridge
 #
 # Usage: bash <(curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh)
 # Or:    curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master/scripts/setup.sh -o setup.sh && bash setup.sh
@@ -17,7 +17,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 VERSION="1.1.2"
-BRIDGE_DIR="$HOME/.opendeck"
+BRIDGE_DIR="$HOME/.openrelay"
 CONFIG_FILE="$BRIDGE_DIR/config.sh"
 
 echo -e "${YELLOW}"
@@ -40,8 +40,8 @@ PREV_TARGET=""
 PREV_PORT="22"
 PREV_PASSWORD=""
 if [ -f "$CONFIG_FILE" ]; then
-    PREV_TARGET=$(grep "export OPENDECK_SSH_TARGET=" "$CONFIG_FILE" | cut -d'"' -f2)
-    PREV_PORT=$(grep "export OPENDECK_SSH_PORT=" "$CONFIG_FILE" | cut -d'"' -f2)
+    PREV_TARGET=$(grep "export OPENRELAY_SSH_TARGET=" "$CONFIG_FILE" | cut -d'"' -f2)
+    PREV_PORT=$(grep "export OPENRELAY_SSH_PORT=" "$CONFIG_FILE" | cut -d'"' -f2)
     PREV_PASSWORD=$(grep "export SSHPASS=" "$CONFIG_FILE" | cut -d'"' -f2)
 fi
 
@@ -83,7 +83,7 @@ echo -e "${YELLOW}▶ Installing Python websockets...${NC}"
 pip install websockets
 
 # --- Create bridge directory ---
-BRIDGE_DIR="$HOME/.opendeck"
+BRIDGE_DIR="$HOME/.openrelay"
 mkdir -p "$BRIDGE_DIR"
 mkdir -p "$BRIDGE_DIR/sockets"
 
@@ -98,25 +98,42 @@ import stat
 import subprocess
 import base64
 
-WEBSOCKET_PORT = int(os.environ.get("OPENDECK_PORT", "8080"))
-SSH_TARGET = os.environ.get("OPENDECK_SSH_TARGET", "")
-SSH_PORT = int(os.environ.get("OPENDECK_SSH_PORT", "22"))
+WEBSOCKET_PORT = int(os.environ.get("OPENRELAY_PORT", "8080"))
+SSH_TARGET = os.environ.get("OPENRELAY_SSH_TARGET", "")
+SSH_PORT = int(os.environ.get("OPENRELAY_SSH_PORT", "22"))
 SSHPASS = os.environ.get("SSHPASS", "")
 
-SOCKET_DIR = os.path.expanduser("~/.opendeck/sockets")
+SOCKET_DIR = os.path.expanduser("~/.openrelay/sockets")
 os.makedirs(SOCKET_DIR, exist_ok=True)
 SOCKET_PATH = os.path.join(SOCKET_DIR, "ssh_mux")
 
 async def run_python_over_ssh(script: str) -> tuple[str, str, int]:
-    """Runs python3 on target and pipes the script to it."""
-    proc = await asyncio.create_subprocess_exec(
-        "ssh", "-o", "ControlPath=" + SOCKET_PATH, SSH_TARGET, "python3",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    stdout, stderr = await proc.communicate(script.encode("utf-8"))
-    return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"), proc.returncode
+    """Runs python3 on target and pipes the script to it, with python fallback for Windows hosts."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ControlPath=" + SOCKET_PATH, SSH_TARGET, "python3",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate(script.encode("utf-8"))
+        stdout_str = stdout.decode("utf-8", errors="replace")
+        stderr_str = stderr.decode("utf-8", errors="replace")
+        
+        if proc.returncode != 0 and ("python3" in stderr_str or "Access is denied" in stderr_str or "not found" in stderr_str or "NativeCommandFailed" in stderr_str):
+            raise Exception("Fallback to python")
+            
+        return stdout_str, stderr_str, proc.returncode
+    except Exception:
+        # Fall back to executing "python" on the host
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ControlPath=" + SOCKET_PATH, SSH_TARGET, "python",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate(script.encode("utf-8"))
+        return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"), proc.returncode
 
 async def handler(websocket):
     proc = None
@@ -340,9 +357,9 @@ chmod +x "$BRIDGE_DIR/bridge.py"
 
 # --- Write config ---
 cat > "$BRIDGE_DIR/config.sh" << EOF
-export OPENDECK_PORT="8080"
-export OPENDECK_SSH_TARGET="$TARGET"
-export OPENDECK_SSH_PORT="$PORT"
+export OPENRELAY_PORT="8080"
+export OPENRELAY_SSH_TARGET="$TARGET"
+export OPENRELAY_SSH_PORT="$PORT"
 export SSHPASS="$PASSWORD"
 EOF
 
@@ -369,9 +386,9 @@ fi
 sleep 0.5
 
 nohup env \
-  OPENDECK_PORT="8080" \
-  OPENDECK_SSH_TARGET="$TARGET" \
-  OPENDECK_SSH_PORT="$PORT" \
+  OPENRELAY_PORT="8080" \
+  OPENRELAY_SSH_TARGET="$TARGET" \
+  OPENRELAY_SSH_PORT="$PORT" \
   SSHPASS="$PASSWORD" \
   python bridge.py > bridge.log 2>&1 &
 BRIDGE_PID=$!
@@ -386,7 +403,7 @@ if kill -0 "$BRIDGE_PID" 2>/dev/null; then
     echo -e "  SSH:     ${BLUE}$TARGET${NC}"
     echo -e "  Address: ${BLUE}ws://127.0.0.1:8080${NC}"
     echo ""
-    echo -e "  ${DIM}Restart: cd ~/.opendeck && bash restart.sh${NC}"
+    echo -e "  ${DIM}Restart: cd ~/.openrelay && bash restart.sh${NC}"
     echo -e "  ${DIM}Stop:    kill $BRIDGE_PID${NC}"
     echo ""
     echo -e "  ${BOLD}Now open the PWA and connect!${NC}"
@@ -400,7 +417,7 @@ fi
 # Write a restart script
 cat > "$BRIDGE_DIR/restart.sh" << 'RSEOF'
 #!/data/data/com.termux/files/usr/bin/bash
-cd ~/.opendeck
+cd ~/.openrelay
 source config.sh
 pkill -f bridge.py || true
 if [ -f bridge.pid ]; then
@@ -411,7 +428,7 @@ if command -v lsof &>/dev/null; then
     lsof -t -i :8080 | xargs kill -9 2>/dev/null || true
 fi
 sleep 0.5
-nohup env OPENDECK_PORT="$OPENDECK_PORT" OPENDECK_SSH_TARGET="$OPENDECK_SSH_TARGET" OPENDECK_SSH_PORT="$OPENDECK_SSH_PORT" SSHPASS="$SSHPASS" python bridge.py > bridge.log 2>&1 &
+nohup env OPENRELAY_PORT="$OPENRELAY_PORT" OPENRELAY_SSH_TARGET="$OPENRELAY_SSH_TARGET" OPENRELAY_SSH_PORT="$OPENRELAY_SSH_PORT" SSHPASS="$SSHPASS" python bridge.py > bridge.log 2>&1 &
 echo $! > bridge.pid
 echo "Bridge restarted (PID: $(cat bridge.pid))"
 RSEOF

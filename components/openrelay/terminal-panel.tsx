@@ -65,7 +65,7 @@ export function TerminalPanel() {
     // Fit after mount
     requestAnimationFrame(() => fitAddon.fit());
 
-    term.write("OpenDeck Terminal\r\n────────────────────\r\n\r\n");
+    term.write("OpenRelay Terminal\r\n────────────────────\r\n\r\n");
 
     term.onData((data) => {
       send({ type: "stdin", data });

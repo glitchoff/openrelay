@@ -66,7 +66,7 @@ export default function Home() {
         <div className="max-w-md w-full mx-auto flex flex-col items-center gap-8">
           <div className="text-center">
             <h1 className="text-3xl font-bold tracking-tight">
-              <span className="text-orange-500">🔥</span> OpenDeck
+              <span className="text-orange-500">🔥</span> OpenRelay
             </h1>
             <p className="mt-1 text-sm text-zinc-500">
               Code editor for Android
@@ -146,7 +146,7 @@ export default function Home() {
 
       <div className="shrink-0 border-t border-zinc-900 px-6 py-3">
         <p className="text-center text-xs text-zinc-700">
-          OpenDeck &mdash; MIT License
+          OpenRelay &mdash; MIT License
         </p>
       </div>
     </div>

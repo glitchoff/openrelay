@@ -48,7 +48,7 @@ export function TerminalTab() {
     term.open(terminalRef.current);
     fitAddon.fit();
 
-    term.write("OpenDeck Terminal\r\n");
+    term.write("OpenRelay Terminal\r\n");
     term.write("────────────────────\r\n\r\n");
     term.write("Connected\r\n\r\n");
 

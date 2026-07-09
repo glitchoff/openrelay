@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-local-bridge.py — OpenDeck local test bridge (Windows/Mac/Linux)
+local-bridge.py — OpenRelay local test bridge (Windows/Mac/Linux)
 
 No SSH. Serves the local filesystem and spawns a local shell.
 Same WebSocket protocol as the Termux bridge.
@@ -33,7 +33,7 @@ except ImportError:
     import websockets
 
 # ── config ─────────────────────────────────────────────────────────────────────
-parser = argparse.ArgumentParser(description="OpenDeck local test bridge")
+parser = argparse.ArgumentParser(description="OpenRelay local test bridge")
 parser.add_argument("--port", type=int, default=8080)
 parser.add_argument("--host", default="127.0.0.1")
 args = parser.parse_args()
@@ -211,7 +211,7 @@ async def handler(websocket):
 async def main():
     shell_label = " ".join(SHELL_CMD)
     print()
-    print("  [OpenDeck] LOCAL Bridge  (no SSH -- for testing)")
+    print("  [OpenRelay] LOCAL Bridge  (no SSH -- for testing)")
     print("  " + "-" * 40)
     print(f"  WebSocket : ws://{args.host}:{args.port}")
     print(f"  Shell     : {shell_label}")

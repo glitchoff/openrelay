@@ -1,11 +1,11 @@
-# 🔥 OpenDeck
+# 🔥 OpenRelay
 
 Code editor for Android. Your dev machine, in your pocket.
 
 ```
 Phone / PWA
     ↕  WebSocket
-OpenDeck Bridge (Termux)
+OpenRelay Bridge (Termux)
     ↕  SSH
 Your Machine
 ```
@@ -27,7 +27,7 @@ curl -sL https://raw.githubusercontent.com/glitchoff/openrelay/refs/heads/master
 
 Follow the prompts — enter your SSH target (user@host) and password. The bridge starts automatically.
 
-Then open **https://opendeck.dev** in your phone browser and connect to `ws://127.0.0.1:8080`.
+Then open **https://openrelay.dev** in your phone browser and connect to `ws://127.0.0.1:8080`.
 
 ## Architecture
 

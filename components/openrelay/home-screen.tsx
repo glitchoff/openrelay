@@ -5,7 +5,6 @@ import { useConnectionStore } from "@/store/connection-store";
 import { useUiStore } from "@/store/ui-store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -58,18 +57,23 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // URL Bar states
+  const [isEditingPath, setIsEditingPath] = useState(false);
+  const [inputPath, setInputPath] = useState(currentPath);
+
   const loadDirs = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
+    const normalized = path.replace(/\\/g, "/");
     try {
-      const entries = await listDir(path);
+      const entries = await listDir(normalized);
       // Filter for directories only
       const folderNames = entries
         .filter((e) => e.is_dir)
         .map((e) => e.name)
         .sort((a, b) => a.localeCompare(b));
       setDirs(folderNames);
-      setCurrentPath(path);
+      setCurrentPath(normalized);
       setLoading(false);
     } catch (e: any) {
       setError(e.message || "Failed to load directory");
@@ -79,6 +83,10 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
   }, [listDir]);
 
   useEffect(() => {
+    setInputPath(currentPath);
+  }, [currentPath]);
+
+  useEffect(() => {
     loadDirs("~").catch(() => {
       // If ~ fails, try root /
       loadDirs("/");
@@ -86,44 +94,127 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
   }, []);
 
   const goUp = () => {
-    const parent = currentPath.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/";
+    const normalized = currentPath.replace(/\\/g, "/");
+    let parent = normalized.replace(/\/+$/, "").split("/").slice(0, -1).join("/");
+    if (!parent) {
+      parent = "/";
+    } else if (/^[a-zA-Z]:$/.test(parent)) {
+      parent += "/"; // Append trailing slash to Windows drives
+    }
     loadDirs(parent);
   };
 
   const handleFolderClick = (folder: string) => {
-    const nextPath = currentPath.replace(/\/+$/, "") + "/" + folder;
+    const normalized = currentPath.replace(/\\/g, "/");
+    const nextPath = normalized.replace(/\/+$/, "") + "/" + folder;
     loadDirs(nextPath);
   };
 
-  const pathParts = currentPath.replace(/\/+$/, "").split("/").filter(Boolean);
+  const handlePathSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    let cleanPath = inputPath.trim().replace(/\\/g, "/");
+    if (cleanPath) {
+      loadDirs(cleanPath)
+        .then(() => setIsEditingPath(false))
+        .catch(() => setIsEditingPath(false));
+    }
+  };
+
+  const isWindowsPath = /^[a-zA-Z]:/.test(currentPath);
+  const pathParts = currentPath.replace(/\/+$/, "").replace(/\\/g, "/").split("/").filter(Boolean);
+  const isAtRoot = currentPath === "/" || /^[a-zA-Z]:\/+$/.test(currentPath);
 
   return (
     <div className="flex flex-col h-[60vh] max-h-[500px]">
-      {/* Path Breadcrumbs */}
-      <div className="flex items-center gap-1.5 px-1 py-2 border-b border-zinc-800 shrink-0 overflow-x-auto scrollbar-none">
+      {/* Path Breadcrumbs / Input */}
+      <div className="flex items-center gap-1.5 px-1 py-2 border-b border-zinc-800 shrink-0">
         <button
           onClick={goUp}
-          disabled={currentPath === "/"}
-          className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 disabled:opacity-30 disabled:pointer-events-none"
+          disabled={isAtRoot}
+          className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 disabled:opacity-30 disabled:pointer-events-none shrink-0"
         >
           <ArrowUpIcon />
         </button>
-        <div className="flex items-center gap-1 text-xs font-mono text-zinc-500">
-          <button onClick={() => loadDirs("/")} className="hover:text-zinc-300">root</button>
-          {pathParts.map((part, i) => {
-            const full = "/" + pathParts.slice(0, i + 1).join("/");
-            return (
-              <span key={full} className="flex items-center gap-1">
-                <span className="text-zinc-700">/</span>
-                <button onClick={() => loadDirs(full)} className="hover:text-zinc-300 max-w-[100px] truncate">{part}</button>
-              </span>
-            );
-          })}
-        </div>
+
+        {isEditingPath ? (
+          <form
+            onSubmit={handlePathSubmit}
+            className="flex-1 flex items-center bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-0.5 gap-1.5"
+          >
+            <input
+              type="text"
+              value={inputPath}
+              onChange={(e) => setInputPath(e.target.value)}
+              className="flex-1 bg-transparent text-xs text-zinc-100 outline-none font-mono py-0.5"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setInputPath(currentPath);
+                  setIsEditingPath(false);
+                }
+              }}
+              onBlur={() => {
+                setTimeout(() => setIsEditingPath(false), 200);
+              }}
+            />
+            <button
+              type="submit"
+              className="text-[10px] bg-orange-500 text-black font-bold px-2 py-0.5 rounded hover:bg-orange-400 active:bg-orange-600 transition-colors"
+            >
+              Go
+            </button>
+          </form>
+        ) : (
+          <div
+            onClick={() => setIsEditingPath(true)}
+            className="flex-1 flex items-center bg-zinc-900/40 hover:bg-zinc-900/80 border border-zinc-900 hover:border-zinc-800/60 rounded-lg px-2 py-1 cursor-text min-w-0 transition-all select-none"
+            title="Click to edit path"
+          >
+            <div className="flex items-center gap-1 text-xs font-mono text-zinc-500 overflow-x-auto scrollbar-none py-0.5 pr-1 w-full">
+              {!isWindowsPath && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    loadDirs("/");
+                  }}
+                  className="hover:text-zinc-300"
+                >
+                  root
+                </button>
+              )}
+              {pathParts.map((part, i) => {
+                let full = "";
+                if (isWindowsPath) {
+                  const slice = pathParts.slice(0, i + 1);
+                  full = slice.join("/");
+                  if (slice.length === 1) {
+                    full += "/";
+                  }
+                } else {
+                  full = "/" + pathParts.slice(0, i + 1).join("/");
+                }
+                return (
+                  <span key={full} className="flex items-center gap-1 shrink-0">
+                    {(!isWindowsPath || i > 0) && <span className="text-zinc-700">/</span>}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        loadDirs(full);
+                      }}
+                      className="hover:text-zinc-300 max-w-[100px] truncate"
+                    >
+                      {part}
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Directory Contents */}
-      <ScrollArea className="flex-1 mt-2">
+      <div className="flex-1 min-h-0 overflow-y-auto mt-2 pr-1 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-12 gap-2">
             <div className="size-6 rounded-full border-2 border-zinc-700 border-t-orange-500 animate-spin" />
@@ -137,7 +228,7 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
         ) : dirs.length === 0 ? (
           <p className="text-center text-sm text-zinc-500 py-12 font-mono">No subdirectories found</p>
         ) : (
-          <div className="space-y-0.5 pr-3">
+          <div className="space-y-0.5 pr-2">
             {dirs.map((name) => (
               <button
                 key={name}
@@ -150,7 +241,7 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
             ))}
           </div>
         )}
-      </ScrollArea>
+      </div>
 
       {/* Footer controls */}
       <div className="pt-4 border-t border-zinc-800 flex items-center gap-2 mt-auto shrink-0">
@@ -185,7 +276,7 @@ export function HomeScreen() {
 
   // Load recent projects
   useEffect(() => {
-    const loaded = localStorage.getItem("opendeck:recent_projects");
+    const loaded = localStorage.getItem("openrelay:recent_projects");
     if (loaded) {
       try {
         setRecentProjects(JSON.parse(loaded));
@@ -195,7 +286,7 @@ export function HomeScreen() {
 
   const saveRecentProjects = (projects: string[]) => {
     setRecentProjects(projects);
-    localStorage.setItem("opendeck:recent_projects", JSON.stringify(projects));
+    localStorage.setItem("openrelay:recent_projects", JSON.stringify(projects));
   };
 
   const handleSelectProject = (path: string) => {
@@ -221,7 +312,7 @@ export function HomeScreen() {
         {/* Header */}
         <div className="text-center space-y-1.5">
           <h1 className="text-3xl font-bold tracking-tight">
-            <span className="text-orange-500">🔥</span> OpenDeck
+            <span className="text-orange-500">🔥</span> OpenRelay
           </h1>
           <p className="text-sm text-zinc-500">
             Connected to bridge &mdash; <span className="font-mono text-zinc-400">{host}:{port}</span>

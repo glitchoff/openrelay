@@ -137,7 +137,7 @@ function TermContent() {
     fitAddon.fit();
     fitAddonRef.current = fitAddon;
 
-    term.write("OpenDeck Terminal\r\n");
+    term.write("OpenRelay Terminal\r\n");
     term.write("────────────────────\r\n\r\n");
 
     term.onData((data) => {
@@ -173,7 +173,7 @@ function TermContent() {
       <div className="flex items-center justify-between px-3 py-1.5 bg-[#1a1a1a] border-b border-[#2a2a2a] shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold tracking-wider text-zinc-400 uppercase">
-            OpenDeck Terminal
+            OpenRelay Terminal
           </span>
           <span
             className={`inline-block size-1.5 rounded-full ${

@@ -81,7 +81,7 @@ export function WorkspaceDashboard() {
 
   // Load recent files from localStorage
   useEffect(() => {
-    const loaded = localStorage.getItem("opendeck:recent_files");
+    const loaded = localStorage.getItem("openrelay:recent_files");
     if (loaded) {
       try {
         setRecentFiles(JSON.parse(loaded));
@@ -99,13 +99,13 @@ export function WorkspaceDashboard() {
         openFile(fullPath, content);
 
         // Add to recent files
-        const loaded = localStorage.getItem("opendeck:recent_files");
+        const loaded = localStorage.getItem("openrelay:recent_files");
         let recents: string[] = [];
         if (loaded) {
           try { recents = JSON.parse(loaded); } catch {}
         }
         const updated = [fullPath, ...recents.filter((p) => p !== fullPath)].slice(0, 8);
-        localStorage.setItem("opendeck:recent_files", JSON.stringify(updated));
+        localStorage.setItem("openrelay:recent_files", JSON.stringify(updated));
         setRecentFiles(updated);
       } catch (err) {
         console.error("Failed to read file", err);
@@ -252,7 +252,7 @@ export function WorkspaceDashboard() {
                 {recentFiles.length > 0 && (
                   <button
                     onClick={() => {
-                      localStorage.removeItem("opendeck:recent_files");
+                      localStorage.removeItem("openrelay:recent_files");
                       setRecentFiles([]);
                     }}
                     className="text-[9px] text-zinc-500 hover:text-zinc-300 font-medium"
