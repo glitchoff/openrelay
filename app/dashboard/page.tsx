@@ -9,6 +9,7 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const connect = useConnectionStore((s) => s.connect);
   const status = useConnectionStore((s) => s.status);
+  const connectionError = useConnectionStore((s) => s.connectionError);
   const hasConnected = useRef(false);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryDelay = useRef(1000);
@@ -29,6 +30,7 @@ function DashboardContent() {
   // Auto-reconnect with exponential backoff when WS drops
   useEffect(() => {
     if (status !== "disconnected" || !hasConnected.current) return;
+    if (connectionError) return; // Stop reconnecting if we have an explicit connection error
 
     const host = searchParams.get("host") || "127.0.0.1";
     const port = parseInt(searchParams.get("port") || "8080");
@@ -43,9 +45,7 @@ function DashboardContent() {
       if (retryTimer.current) clearTimeout(retryTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
-
-  const connectionError = useConnectionStore((s) => s.connectionError);
+  }, [status, connectionError]);
 
   // First time: show waiting screen until we connect
   if (!hasConnected.current) {
