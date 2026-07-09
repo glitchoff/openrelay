@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useConnectionStore } from "@/store/connection-store";
 import { useEditorStore } from "@/store/editor-store";
 import { useUiStore } from "@/store/ui-store";
@@ -38,18 +38,18 @@ function ChevronIcon({ expanded, className }: { expanded: boolean; className?: s
   );
 }
 
-function RefreshIcon() {
+function PlusIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 11-.57-8.38l.57-.57" />
+    <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M12 5v14M5 12h14" />
     </svg>
   );
 }
 
-function CollapseAllIcon() {
+function NewFolderIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 6h8M6 12h12M10 18h4" />
+    <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7.5C3 6.119 4.119 5 5.5 5h3.586a1 1 0 01.707.293L11.5 7H19a2 2 0 012 2v1.5M12 12v6m-3-3h6" />
     </svg>
   );
 }
@@ -80,6 +80,8 @@ interface DirCache {
 export function ExplorerPanel() {
   const listDir = useConnectionStore((s) => s.listDir);
   const readFile = useConnectionStore((s) => s.readFile);
+  const writeFile = useConnectionStore((s) => s.writeFile);
+  const createDir = useConnectionStore((s) => s.createDir);
   const openFile = useEditorStore((s) => s.openFile);
   const openFiles = useEditorStore((s) => s.openFiles);
   const activeFile = useEditorStore((s) => s.activeFile);
@@ -91,15 +93,37 @@ export function ExplorerPanel() {
 
   const rootPath = projectPath || "~";
 
-  // ── Dir cache ──
-
   const [dirCache, setDirCache] = useState<Record<string, DirCache>>(() => ({
     [rootPath]: { entries: [], loading: true },
   }));
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([rootPath]));
-
-  // Section collapse state
   const [openFilesCollapsed, setOpenFilesCollapsed] = useState(false);
+
+  // Context menu state
+  const [ctxMenu, setCtxMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+  const ctxRef = useRef<HTMLDivElement>(null);
+
+  // New item prompt
+  const [newItemPrompt, setNewItemPrompt] = useState<{ parentPath: string; type: "file" | "folder" } | null>(null);
+  const [newItemName, setNewItemName] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Close ctx menu on outside click
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (ctxRef.current && !ctxRef.current.contains(e.target as Node)) {
+        setCtxMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [ctxMenu]);
+
+  // Focus input when prompt opens
+  useEffect(() => {
+    if (newItemPrompt) inputRef.current?.focus();
+  }, [newItemPrompt]);
 
   // Load root on mount / project change
   useEffect(() => {
@@ -133,7 +157,6 @@ export function ExplorerPanel() {
     return () => { cancelled = true; };
   }, [rootPath, listDir]);
 
-  // Expand root by default when project path loads
   useEffect(() => {
     if (rootPath && rootPath !== "~") {
       setExpanded((prev) => {
@@ -177,7 +200,6 @@ export function ExplorerPanel() {
         next.delete(path);
       } else {
         next.add(path);
-        // Load lazily
         if (!dirCache[path] || !dirCache[path].entries.length) {
           loadDir(path);
         }
@@ -194,17 +216,53 @@ export function ExplorerPanel() {
     try {
       const content = await readFile(fullPath);
       openFile(fullPath, content);
-
-      const loaded = localStorage.getItem("openrelay:recent_files");
-      let recents: string[] = [];
-      if (loaded) {
-        try { recents = JSON.parse(loaded); } catch {}
-      }
-      const updated = [fullPath, ...recents.filter((p) => p !== fullPath)].slice(0, 8);
-      localStorage.setItem("openrelay:recent_files", JSON.stringify(updated));
-
       setActiveView("editor");
     } catch {}
+  }
+
+  // ── Long-press handlers ──
+
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleFolderPointerDown(e: React.PointerEvent, path: string) {
+    longPressTimer.current = setTimeout(() => {
+      setCtxMenu({ path, x: e.clientX, y: e.clientY });
+    }, 500);
+  }
+
+  function handleFolderPointerUp() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+
+  // ── Create item ──
+
+  async function handleCreateItem() {
+    if (!newItemPrompt || !newItemName.trim()) return;
+    const name = newItemName.trim();
+    const fullPath = newItemPrompt.parentPath.replace(/\/+$/, "") + "/" + name;
+
+    try {
+      if (newItemPrompt.type === "folder") {
+        await createDir(fullPath);
+      } else {
+        await writeFile(fullPath, "");
+      }
+      // Refresh parent dir
+      await loadDir(newItemPrompt.parentPath);
+      // Expand parent
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.add(newItemPrompt.parentPath);
+        return next;
+      });
+    } catch {}
+
+    setNewItemPrompt(null);
+    setNewItemName("");
+    setCtxMenu(null);
   }
 
   // ── Render tree ──
@@ -223,17 +281,22 @@ export function ExplorerPanel() {
           if (entry.is_dir) {
             const childExpanded = expanded.has(fullPath);
             const childCache = dirCache[fullPath];
-            const isActive = activeFile === fullPath;
 
             return (
               <div key={fullPath}>
                 <button
                   onClick={() => toggleExpand(fullPath)}
+                  onPointerDown={(e) => handleFolderPointerDown(e, fullPath)}
+                  onPointerUp={handleFolderPointerUp}
+                  onPointerLeave={handleFolderPointerUp}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setCtxMenu({ path: fullPath, x: e.clientX, y: e.clientY });
+                  }}
                   className={cn(
                     "w-full flex items-center gap-1.5 px-2 py-1 text-sm text-left",
                     "min-h-[34px] touch-pan-y select-none",
-                    "hover:bg-zinc-800/60 active:bg-zinc-800 transition-colors",
-                    isActive && "bg-orange-500/10 text-orange-400"
+                    "hover:bg-zinc-800/60 active:bg-zinc-800 transition-colors"
                   )}
                   style={{ paddingLeft: `${8 + depth * 16}px` }}
                 >
@@ -268,7 +331,6 @@ export function ExplorerPanel() {
             );
           }
 
-          // File node
           const isActiveFile = activeFile === fullPath;
           return (
             <button
@@ -302,18 +364,37 @@ export function ExplorerPanel() {
         </span>
         <div className="flex items-center gap-1">
           <button
+            onClick={() => setNewItemPrompt({ parentPath: rootPath, type: "file" })}
+            title="New File"
+            className="p-1.5 rounded-lg hover:bg-zinc-800/80 text-zinc-500 hover:text-zinc-200 transition-colors"
+          >
+            <PlusIcon />
+          </button>
+          <button
+            onClick={() => setNewItemPrompt({ parentPath: rootPath, type: "folder" })}
+            title="New Folder"
+            className="p-1.5 rounded-lg hover:bg-zinc-800/80 text-zinc-500 hover:text-zinc-200 transition-colors"
+          >
+            <NewFolderIcon />
+          </button>
+          <span className="w-px h-4 bg-zinc-800 mx-0.5" />
+          <button
             onClick={collapseAll}
             title="Collapse All"
             className="p-1.5 rounded-lg hover:bg-zinc-800/80 text-zinc-500 hover:text-zinc-200 transition-colors"
           >
-            <CollapseAllIcon />
+            <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 6h8M6 12h12M10 18h4" />
+            </svg>
           </button>
           <button
             onClick={() => loadDir(rootPath)}
             title="Refresh"
             className="p-1.5 rounded-lg hover:bg-zinc-800/80 text-zinc-500 hover:text-zinc-200 transition-colors"
           >
-            <RefreshIcon />
+            <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 11-.57-8.38l.57-.57" />
+            </svg>
           </button>
           <span
             className={cn(
@@ -325,8 +406,8 @@ export function ExplorerPanel() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-y-auto touch-pan-y scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent bg-zinc-950/5">
-        {/* ── OPEN FILES section ── */}
+      <div className="flex-1 min-h-0 overflow-y-auto touch-pan-y scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent bg-zinc-950/5" style={{ willChange: "transform", transform: "translateZ(0)" }}>
+        {/* OPEN FILES section */}
         <div className="border-b border-zinc-900/50">
           <button
             onClick={() => setOpenFilesCollapsed(!openFilesCollapsed)}
@@ -384,7 +465,7 @@ export function ExplorerPanel() {
           )}
         </div>
 
-        {/* ── PROJECT FILES section ── */}
+        {/* PROJECT FILES section */}
         <div>
           <div className="flex items-center gap-1.5 px-3 py-1.5 select-none min-h-[32px]">
             <SectionChevron collapsed={false} />
@@ -401,9 +482,15 @@ export function ExplorerPanel() {
               </div>
             ) : (
               <div>
-                {/* Root folder header */}
                 <button
                   onClick={() => toggleExpand(rootPath)}
+                  onPointerDown={(e) => handleFolderPointerDown(e, rootPath)}
+                  onPointerUp={handleFolderPointerUp}
+                  onPointerLeave={handleFolderPointerUp}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setCtxMenu({ path: rootPath, x: e.clientX, y: e.clientY });
+                  }}
                   className={cn(
                     "w-full flex items-center gap-1.5 px-3 py-1 text-sm text-left",
                     "min-h-[34px] touch-pan-y select-none",
@@ -419,11 +506,125 @@ export function ExplorerPanel() {
                 </button>
 
                 {expanded.has(rootPath) && renderTree(rootPath, 1)}
+
+                {/* Inline new item prompt at root */}
+                {newItemPrompt && newItemPrompt.parentPath === rootPath && (
+                  <NewItemInput
+                    ref={inputRef}
+                    type={newItemPrompt.type}
+                    value={newItemName}
+                    onChange={setNewItemName}
+                    onSubmit={handleCreateItem}
+                    onCancel={() => { setNewItemPrompt(null); setNewItemName(""); }}
+                  />
+                )}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Context menu */}
+      {ctxMenu && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setCtxMenu(null)} />
+          <div
+            ref={ctxRef}
+            className="fixed z-50 min-w-40 bg-zinc-950 border border-zinc-800 rounded-xl shadow-2xl py-1 overflow-hidden"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          >
+            <button
+              onClick={() => {
+                setNewItemPrompt({ parentPath: ctxMenu.path, type: "file" });
+                setNewItemName("");
+                setCtxMenu(null);
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+            >
+              <PlusIcon />
+              <span>New File</span>
+            </button>
+            <button
+              onClick={() => {
+                setNewItemPrompt({ parentPath: ctxMenu.path, type: "folder" });
+                setNewItemName("");
+                setCtxMenu(null);
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+            >
+              <NewFolderIcon />
+              <span>New Folder</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Inline new item prompt (non-root) */}
+      {newItemPrompt && newItemPrompt.parentPath !== rootPath && (
+        <NewItemInput
+          ref={inputRef}
+          type={newItemPrompt.type}
+          value={newItemName}
+          onChange={setNewItemName}
+          onSubmit={handleCreateItem}
+          onCancel={() => { setNewItemPrompt(null); setNewItemName(""); }}
+        />
+      )}
     </div>
   );
 }
+
+// ── Inline prompt for new file/folder name ──
+
+const NewItemInput = React.forwardRef<
+  HTMLInputElement,
+  {
+    type: "file" | "folder";
+    value: string;
+    onChange: (v: string) => void;
+    onSubmit: () => void;
+    onCancel: () => void;
+  }
+>(({ type, value, onChange, onSubmit, onCancel }, ref) => {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onCancel}>
+      <div
+        className="bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl p-5 w-full max-w-xs mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="text-sm font-medium text-zinc-200 mb-3">
+          New {type === "folder" ? "Folder" : "File"}
+        </p>
+        <input
+          ref={ref}
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={type === "folder" ? "folder name" : "file name"}
+          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5 text-sm text-zinc-100 outline-none font-mono placeholder:text-zinc-600 focus:border-orange-500/50 transition-colors"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onSubmit();
+            if (e.key === "Escape") onCancel();
+          }}
+        />
+        <div className="flex items-center gap-2 mt-4">
+          <button
+            onClick={onCancel}
+            className="text-xs px-3 py-1.5 rounded-lg bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onSubmit}
+            disabled={!value.trim()}
+            className="text-xs px-4 py-1.5 rounded-lg bg-orange-500 text-black font-semibold hover:bg-orange-400 disabled:opacity-40 transition-colors ml-auto"
+          >
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+

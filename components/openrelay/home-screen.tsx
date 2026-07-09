@@ -50,7 +50,7 @@ interface FolderPickerProps {
   onClose: () => void;
 }
 
-function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
+export function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
   const listDir = useConnectionStore((s) => s.listDir);
   const [currentPath, setCurrentPath] = useState("~");
   const [dirs, setDirs] = useState<string[]>([]);

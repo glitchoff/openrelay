@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useUiStore } from "@/store/ui-store";
-import { useEditorStore } from "@/store/editor-store";
 import { useConnectionStore } from "@/store/connection-store";
 import { EditorPanel } from "./editor-panel";
 import { ExplorerPanel } from "./explorer-panel";
@@ -35,17 +34,22 @@ function TerminalIcon() {
   );
 }
 
+function CommandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="size-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 6v12a3 3 0 11-3-3h0a3 3 0 01-3-3V6a3 3 0 116 0zM6 4h0M18 4h0" />
+    </svg>
+  );
+}
+
 export function Dashboard() {
   const projectPath = useConnectionStore((s) => s.projectPath);
   const activeView = useUiStore((s) => s.activeView);
   const setActiveView = useUiStore((s) => s.setActiveView);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isProgrammaticRef = useRef(false);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(true);
+  const [commandOpen, setCommandOpen] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -56,61 +60,6 @@ export function Dashboard() {
     window.addEventListener("resize", checkSize);
     return () => window.removeEventListener("resize", checkSize);
   }, []);
-
-  // Sync scroll position when activeView changes (Mobile only)
-  useEffect(() => {
-    if (!isMobile || !mounted) return;
-    const container = containerRef.current;
-    if (!container || projectPath === null) return;
-
-    const views = ["explorer", "editor", "terminal"];
-    const index = views.indexOf(activeView);
-    if (index === -1) return;
-
-    const expectedScrollLeft = index * container.clientWidth;
-    if (Math.abs(container.scrollLeft - expectedScrollLeft) > 5) {
-      isProgrammaticRef.current = true;
-      container.scrollTo({ left: expectedScrollLeft, behavior: "smooth" });
-
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        isProgrammaticRef.current = false;
-      }, 350);
-    }
-  }, [activeView, projectPath, isMobile, mounted]);
-
-  // Adjust scroll alignment on resize (Mobile only)
-  useEffect(() => {
-    if (!isMobile || !mounted) return;
-    const handleResize = () => {
-      const container = containerRef.current;
-      if (!container || projectPath === null) return;
-      const views = ["explorer", "editor", "terminal"];
-      const index = views.indexOf(activeView);
-      if (index !== -1) {
-        container.scrollTo({ left: index * container.clientWidth, behavior: "auto" });
-      }
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [activeView, projectPath, isMobile, mounted]);
-
-  const handleScroll = () => {
-    const container = containerRef.current;
-    if (!container || isProgrammaticRef.current) return;
-
-    const scrollLeft = container.scrollLeft;
-    const width = container.clientWidth;
-    if (width === 0) return;
-
-    const index = Math.round(scrollLeft / width);
-    const views = ["explorer", "editor", "terminal"] as const;
-    const targetView = views[index];
-
-    if (targetView && targetView !== activeView) {
-      setActiveView(targetView);
-    }
-  };
 
   // If no project is selected, show the Home selection screen
   if (projectPath === null) {
@@ -127,34 +76,21 @@ export function Dashboard() {
 
   if (isMobile) {
     return (
-      <div className="fixed inset-0 flex flex-col bg-black text-zinc-100 overflow-hidden">
-        {/* Swipeable container */}
-        <div
-          ref={containerRef}
-          onScroll={handleScroll}
-          className="flex-1 flex overflow-x-auto snap-x snap-mandatory scrollbar-none bg-black select-none touch-auto"
-          style={{
-            scrollBehavior: "smooth",
-            WebkitOverflowScrolling: "touch",
-          }}
-        >
-          {/* Left: File Explorer */}
-          <div className="w-full h-full shrink-0 snap-start bg-zinc-950/30">
+      <div className="fixed inset-0 flex flex-col bg-black text-zinc-100 overflow-hidden" style={{ willChange: "transform", transform: "translateZ(0)" }}>
+        {/* Active view — always mounted, hidden with CSS to preserve state */}
+        <div className="flex-1 min-h-0 relative">
+          <div className={`absolute inset-0 ${activeView === "explorer" ? "z-10" : "z-0 invisible"}`}>
             <ExplorerPanel />
           </div>
-
-          {/* Center: Editor */}
-          <div className="w-full h-full shrink-0 snap-start bg-black">
+          <div className={`absolute inset-0 ${activeView === "editor" ? "z-10" : "z-0 invisible"}`}>
             <EditorPanel />
           </div>
-
-          {/* Right: Terminal */}
-          <div className="w-full h-full shrink-0 snap-start bg-zinc-950/30">
+          <div className={`absolute inset-0 ${activeView === "terminal" ? "z-10" : "z-0 invisible"}`}>
             <TerminalPanel />
           </div>
         </div>
 
-        {/* Bottom tab bar */}
+        {/* Bottom dock */}
         <div className="flex items-center justify-around px-2 py-1.5 bg-[#0f0f0f] border-t border-zinc-900 shrink-0 safe-area-bottom">
           <button
             onClick={() => setActiveView("explorer")}
@@ -181,6 +117,16 @@ export function Dashboard() {
           </button>
 
           <button
+            onClick={() => setCommandOpen(true)}
+            className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
+              commandOpen ? "text-orange-500" : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <CommandIcon />
+            <span className="text-[9px] font-medium">Commands</span>
+          </button>
+
+          <button
             onClick={() => setActiveView("terminal")}
             className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-lg transition-colors ${
               activeView === "terminal"
@@ -192,13 +138,18 @@ export function Dashboard() {
             <span className="text-[9px] font-medium">Terminal</span>
           </button>
         </div>
+
+        {/* Command palette */}
+        {commandOpen && (
+          <CommandPalette onClose={() => setCommandOpen(false)} />
+        )}
       </div>
     );
   }
 
   // Desktop splits layout
   return (
-    <div className="fixed inset-0 flex bg-black text-zinc-100 overflow-hidden divide-x divide-zinc-900">
+    <div className="fixed inset-0 flex bg-black text-zinc-100 overflow-hidden divide-x divide-zinc-900" style={{ willChange: "transform", transform: "translateZ(0)" }}>
       {/* Left sidebar: File Explorer */}
       <div className="w-72 shrink-0 h-full flex flex-col bg-zinc-950/20">
         <ExplorerPanel />
@@ -214,5 +165,104 @@ export function Dashboard() {
         </div>
       </div>
     </div>
+  );
+}
+
+function getSettings() {
+  let wrap = true, autosave = false;
+  try { wrap = localStorage.getItem("openrelay:wrap") !== "false"; } catch {}
+  try { autosave = localStorage.getItem("openrelay:autosave") === "true"; } catch {}
+  return { wrap, autosave };
+}
+
+function CommandPalette({ onClose }: { onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [settings, setSettings] = useState(getSettings);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const commands = [
+    { id: "open-file", label: "Open File", shortcut: "Ctrl+P", badge: null as string | null },
+    { id: "toggle-wrap", label: "Toggle Word Wrap", shortcut: "", badge: settings.wrap ? "ON" : "OFF" },
+    { id: "toggle-autosave", label: "Toggle Auto Save", shortcut: "", badge: settings.autosave ? "ON" : "OFF" },
+    { id: "go-terminal", label: "Focus Terminal", shortcut: "Ctrl+`", badge: null },
+    { id: "go-explorer", label: "Focus Explorer", shortcut: "Ctrl+B", badge: null },
+  ];
+
+  const filtered = commands.filter((c) =>
+    c.label.toLowerCase().includes(query.toLowerCase())
+  );
+
+  function handleSelect(id: string) {
+    const setActiveView = useUiStore.getState().setActiveView;
+    switch (id) {
+      case "go-terminal": setActiveView("terminal"); break;
+      case "go-explorer": setActiveView("explorer"); break;
+      case "toggle-wrap": {
+        const v = !getSettings().wrap;
+        try { localStorage.setItem("openrelay:wrap", String(v)); } catch {}
+        setSettings(getSettings());
+        return; // don't close
+      }
+      case "toggle-autosave": {
+        const v = !getSettings().autosave;
+        try { localStorage.setItem("openrelay:autosave", String(v)); } catch {}
+        setSettings(getSettings());
+        return; // don't close
+      }
+      case "open-file": break;
+    }
+    onClose();
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/60" onClick={onClose} />
+      <div className="fixed left-1/2 top-1/4 -translate-x-1/2 z-50 w-full max-w-sm bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <svg viewBox="0 0 24 24" fill="none" className="size-4 text-zinc-500 shrink-0" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <circle cx="11" cy="11" r="8" />
+            <path d="M21 21l-4.35-4.35" />
+          </svg>
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Type a command..."
+            className="flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+          />
+        </div>
+        <div className="max-h-64 overflow-y-auto py-1">
+          {filtered.map((cmd) => (
+            <button
+              key={cmd.id}
+              onClick={() => handleSelect(cmd.id)}
+              className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-left text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+            >
+              <span>{cmd.label}</span>
+              {cmd.badge !== null ? (
+                <span className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded ${cmd.badge === "ON" ? "text-green-500 bg-green-950/30" : "text-zinc-600 bg-zinc-900"}`}>
+                  {cmd.badge}
+                </span>
+              ) : cmd.shortcut ? (
+                <span className="text-[10px] text-zinc-600 font-mono">{cmd.shortcut}</span>
+              ) : null}
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <p className="text-center text-xs text-zinc-600 py-6">No commands match</p>
+          )}
+        </div>
+      </div>
+    </>
   );
 }

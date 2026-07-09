@@ -15,6 +15,7 @@ import { useConnectionStore } from "@/store/connection-store";
 import { useUiStore } from "@/store/ui-store";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { WorkspaceDashboard } from "./workspace-dashboard";
+import { SettingsPanel } from "./settings-panel";
 
 function extForPath(path: string) {
   const ext = path.split(".").pop()?.toLowerCase();
@@ -45,12 +46,53 @@ export function EditorPanel() {
 
   const file = activeFile ? openFiles[activeFile] : null;
 
+  // ── Settings (persisted to localStorage) ──
+
+  const [wrap, setWrap] = useState(() => {
+    try { return localStorage.getItem("openrelay:wrap") !== "false"; } catch { return true; }
+  });
+  const [autosave, setAutosave] = useState(() => {
+    try { return localStorage.getItem("openrelay:autosave") === "true"; } catch { return false; }
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Persist settings
+  useEffect(() => {
+    try { localStorage.setItem("openrelay:wrap", String(wrap)); } catch {}
+  }, [wrap]);
+  useEffect(() => {
+    try { localStorage.setItem("openrelay:autosave", String(autosave)); } catch {}
+  }, [autosave]);
+
+  // ── Autosave debounce ──
+
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!autosave || !activeFile) return;
+    const f = openFiles[activeFile];
+    if (!f || !f.dirty) return;
+
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(async () => {
+      try {
+        await writeFile(activeFile, f.content);
+        markClean(activeFile);
+      } catch {}
+    }, 1500);
+
+    return () => {
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    };
+  }, [autosave, activeFile, openFiles, writeFile, markClean]);
+
   useEffect(() => {
     if (!editorRef.current || !file) return;
 
     const extensions = [
       basicSetup,
       oneDark,
+      wrap ? EditorView.lineWrapping : [],
       EditorView.updateListener.of((update) => {
         if (update.docChanged && file) {
           setFileContent(file.path, update.state.doc.toString());
@@ -62,7 +104,7 @@ export function EditorPanel() {
         ".cm-content": { padding: "8px 0" },
         ".cm-gutters": { borderRight: "none", backgroundColor: "transparent" },
       }),
-    ];
+    ].flat();
 
     const lang = extForPath(file.path);
     if (lang) extensions.push(lang);
@@ -79,7 +121,7 @@ export function EditorPanel() {
       view.destroy();
       viewRef.current = null;
     };
-  }, [file?.path]);
+  }, [file?.path, wrap]);
 
   // Update content when file changes while editor is mounted
   useEffect(() => {
@@ -166,16 +208,40 @@ export function EditorPanel() {
           {file.dirty && <span className="size-1.5 rounded-full bg-yellow-500 shrink-0" />}
         </div>
         
-        <button
-          onClick={handleSave}
-          disabled={!file.dirty}
-          className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-orange-500 text-black disabled:opacity-40 disabled:cursor-not-allowed hover:bg-orange-400 active:bg-orange-600 transition-colors shrink-0"
-        >
-          Save
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {autosave && (
+            <span className="text-[9px] text-zinc-600 font-mono tabular-nums">AUTO</span>
+          )}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+            className="p-1.5 rounded-lg hover:bg-zinc-800/80 text-zinc-500 hover:text-zinc-200 transition-colors shrink-0"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+            </svg>
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!file.dirty}
+            className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-orange-500 text-black disabled:opacity-40 disabled:cursor-not-allowed hover:bg-orange-400 active:bg-orange-600 transition-colors shrink-0"
+          >
+            Save
+          </button>
+        </div>
       </div>
 
-      <div ref={editorRef} className="flex-1 overflow-hidden" />
+      <div ref={editorRef} className="flex-1 overflow-hidden" style={{ willChange: "transform", transform: "translateZ(0)" }} />
+
+      <SettingsPanel
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        autosave={autosave}
+        onAutosaveChange={setAutosave}
+        wrap={wrap}
+        onWrapChange={setWrap}
+      />
     </div>
   );
 }

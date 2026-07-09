@@ -50,7 +50,7 @@ Then open **https://openrelay.dev** in your phone browser and connect to `ws://1
 
 ## Development
 
-```bash
+```bash 
 pnpm install
 pnpm dev
 ```

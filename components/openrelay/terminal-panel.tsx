@@ -6,13 +6,11 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { useConnectionStore } from "@/store/connection-store";
 import { useTerminalStore } from "@/store/terminal-store";
-import { KeyboardBar } from "./keyboard-bar";
 
 export function TerminalPanel() {
   const terminalRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const resizeObserver = useRef<ResizeObserver | null>(null);
 
   const status = useConnectionStore((s) => s.status);
   const send = useConnectionStore((s) => s.send);
@@ -60,30 +58,23 @@ export function TerminalPanel() {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
-    fitRef.current = fitAddon;
 
-    // Fit after mount
     requestAnimationFrame(() => fitAddon.fit());
-
-    term.write("OpenRelay Terminal\r\n────────────────────\r\n\r\n");
 
     term.onData((data) => {
       send({ type: "stdin", data });
     });
 
     termRef.current = term;
+    fitRef.current = fitAddon;
     setOnStdout((data: string) => term.write(data));
 
-    // ResizeObserver for container sizing
     const ro = new ResizeObserver(() => {
       try { fitAddon.fit(); } catch {}
     });
     if (terminalRef.current.parentElement) {
       ro.observe(terminalRef.current.parentElement);
     }
-    resizeObserver.current = ro;
-
-    // Also observe the terminal ref itself
     if (terminalRef.current) {
       ro.observe(terminalRef.current);
     }
@@ -97,19 +88,24 @@ export function TerminalPanel() {
     };
   }, [send, setOnStdout]);
 
-  // Re-fit when active terminal changes (tab switch)
   useEffect(() => {
-    const ro = resizeObserver.current;
-    if (ro && terminalRef.current) {
+    if (fitRef.current) {
       requestAnimationFrame(() => {
         try { fitRef.current?.fit(); } catch {}
       });
     }
   }, [activeId]);
 
+  function handleClear() {
+    const term = termRef.current;
+    if (!term) return;
+    send({ type: "stdin", data: "\x0c" });
+    term.clear();
+  }
+
   return (
-    <div className="flex flex-col h-full">
-      {/* Terminal tabs bar */}
+    <div className="flex flex-col h-full" style={{ willChange: "transform", transform: "translateZ(0)" }}>
+      {/* Terminal tabs */}
       <div className="flex items-center gap-0.5 px-2 py-1 bg-[#121212] border-b border-zinc-800 shrink-0 overflow-x-auto">
         {terminals.map((t) => (
           <button
@@ -153,8 +149,73 @@ export function TerminalPanel() {
         <div ref={terminalRef} className="absolute inset-0" />
       </div>
 
-      {/* Keyboard toolbar */}
-      <KeyboardBar />
+      {/* Toolbar */}
+      <div className="flex items-center gap-1 px-2 py-1.5 bg-[#151515] border-t border-zinc-800 overflow-x-auto shrink-0 select-none">
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => send({ type: "stdin", data: "\x1b" })}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          Esc
+        </button>
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => send({ type: "stdin", data: "\t" })}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          Tab
+        </button>
+        <span className="w-px h-6 bg-zinc-800 mx-1 shrink-0" />
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => send({ type: "stdin", data: "\x1b[A" })}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          ↑
+        </button>
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => send({ type: "stdin", data: "\x1b[B" })}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          ↓
+        </button>
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => send({ type: "stdin", data: "\x1b[D" })}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          ←
+        </button>
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => send({ type: "stdin", data: "\x1b[C" })}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          →
+        </button>
+        <span className="w-px h-6 bg-zinc-800 mx-1 shrink-0" />
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => send({ type: "stdin", data: "\x7f" })}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          ⌫
+        </button>
+        <button
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={handleClear}
+          className="flex items-center justify-center min-w-[36px] h-8 px-2 rounded-md text-xs font-medium bg-zinc-800 text-zinc-300 active:bg-zinc-700 transition-colors select-none touch-none"
+        >
+          Clear
+        </button>
+        <div className="flex-1" />
+        <span
+          className={`size-1.5 rounded-full shrink-0 ${
+            status === "connected" ? "bg-green-500" : "bg-zinc-700"
+          }`}
+        />
+      </div>
     </div>
   );
 }

@@ -25,6 +25,8 @@ interface ConnectionState {
   listDir: (path: string) => Promise<FileEntry[]>;
   readFile: (path: string) => Promise<string>;
   writeFile: (path: string, content: string) => Promise<void>;
+  createDir: (path: string) => Promise<void>;
+  rename: (old_path: string, new_path: string) => Promise<void>;
   projectPath: string | null;
   setProjectPath: (path: string | null) => void;
   connectionError: string | null;
@@ -109,6 +111,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
           case "write_file_result":
             settle(resolveKey(msg.id, msg.path), (p) => p.resolve(undefined));
             break;
+          case "mkdir_result":
+            settle(resolveKey(msg.id, msg.path), (p) => p.resolve(undefined));
+            break;
+          case "rename_result":
+            settle(resolveKey(msg.id, msg.old_path || msg.new_path), (p) => p.resolve(undefined));
+            break;
           case "error": {
             if (!msg.id && !msg.path) {
               set({ connectionError: msg.message });
@@ -180,5 +188,25 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
       state.pending.set(id, { resolve, reject, path } as Pending);
       state._pathToId.set(path, id);
       state.send({ type: "write_file", path, content, id });
+    }),
+
+  createDir: (path: string) =>
+    new Promise((resolve, reject) => {
+      const state = get();
+      const id = String(state._nextId);
+      set({ _nextId: state._nextId + 1 });
+      state.pending.set(id, { resolve, reject, path } as Pending);
+      state._pathToId.set(path, id);
+      state.send({ type: "mkdir", path, id });
+    }),
+
+  rename: (old_path: string, new_path: string) =>
+    new Promise((resolve, reject) => {
+      const state = get();
+      const id = String(state._nextId);
+      set({ _nextId: state._nextId + 1 });
+      state.pending.set(id, { resolve, reject, path: old_path } as Pending);
+      state._pathToId.set(old_path, id);
+      state.send({ type: "rename", old_path, new_path, id });
     }),
 }));

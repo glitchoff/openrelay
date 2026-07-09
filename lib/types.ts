@@ -42,6 +42,19 @@ export interface WriteFileMsg {
   id?: string;
 }
 
+export interface CreateDirMsg {
+  type: "mkdir";
+  path: string;
+  id?: string;
+}
+
+export interface RenameMsg {
+  type: "rename";
+  old_path: string;
+  new_path: string;
+  id?: string;
+}
+
 export interface DisconnectMsg {
   type: "disconnect";
 }
@@ -53,6 +66,8 @@ export type OutgoingMsg =
   | ListDirMsg
   | ReadFileMsg
   | WriteFileMsg
+  | CreateDirMsg
+  | RenameMsg
   | DisconnectMsg;
 
 export interface ConnectedResult {
@@ -87,6 +102,21 @@ export interface WriteFileResult {
   id?: string;
 }
 
+export interface CreateDirResult {
+  type: "mkdir_result";
+  path: string;
+  success: true;
+  id?: string;
+}
+
+export interface RenameResult {
+  type: "rename_result";
+  old_path: string;
+  new_path: string;
+  success: true;
+  id?: string;
+}
+
 export interface ErrorResult {
   type: "error";
   message: string;
@@ -100,4 +130,6 @@ export type IncomingMsg =
   | ListDirResult
   | ReadFileResult
   | WriteFileResult
+  | CreateDirResult
+  | RenameResult
   | ErrorResult;
