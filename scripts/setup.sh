@@ -37,12 +37,13 @@ echo -e "${YELLOW}▶ Installing dependencies...${NC}"
 pkg update -y -q
 pkg install -y python openssh sshpass lsof python-cryptography
 
-echo -e "${YELLOW}▶ Installing Python websockets and paramiko...${NC}"
-pip install websockets paramiko
+echo -e "${YELLOW}▶ Installing Python websockets...${NC}"
+pip install websockets
 
 # --- Create bridge directory ---
 BRIDGE_DIR="$HOME/.opendeck"
 mkdir -p "$BRIDGE_DIR"
+mkdir -p "$BRIDGE_DIR/sockets"
 
 # --- Write the bridge script ---
 cat > "$BRIDGE_DIR/bridge.py" << 'PYEOF'
@@ -53,78 +54,80 @@ import os
 import sys
 import stat
 import subprocess
+import base64
 
 WEBSOCKET_PORT = int(os.environ.get("OPENDECK_PORT", "8080"))
 SSH_TARGET = os.environ.get("OPENDECK_SSH_TARGET", "")
 SSH_PORT = int(os.environ.get("OPENDECK_SSH_PORT", "22"))
 SSHPASS = os.environ.get("SSHPASS", "")
 
-async def handler(websocket):
-    ssh = None
-    sftp = None
-    channel = None
-    loop = asyncio.get_event_loop()
+SOCKET_DIR = os.path.expanduser("~/.opendeck/sockets")
+os.makedirs(SOCKET_DIR, exist_ok=True)
+SOCKET_PATH = os.path.join(SOCKET_DIR, "ssh_mux")
 
+async def run_cmd_over_ssh(cmd: str) -> tuple[str, str, int]:
+    """Runs a command over the multiplexed SSH connection."""
+    proc = await asyncio.create_subprocess_exec(
+        "ssh", "-o", "ControlPath=" + SOCKET_PATH, SSH_TARGET, cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"), proc.returncode
+
+async def handler(websocket):
+    proc = None
     try:
         raw = await websocket.recv()
         msg = json.loads(raw)
         if msg.get("type") != "connect":
             await websocket.send(json.dumps({"type": "error", "message": "First message must be connect"}))
             return
-        
-        target = msg.get("target", SSH_TARGET)
-        port = int(msg.get("port", SSH_PORT))
-        password = msg.get("password") or SSHPASS
 
-        if not target:
-            await websocket.send(json.dumps({"type": "error", "message": "No SSH target configured"}))
-            return
-
-        if "@" in target:
-            username, host = target.split("@", 1)
-        else:
-            username, host = None, target
-
-        await websocket.send(json.dumps({"type": "connecting", "host": host, "port": port}))
-
-        import paramiko
-        try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # Start master connection in background if not already running
+        if not os.path.exists(SOCKET_PATH):
+            await websocket.send(json.dumps({"type": "connecting", "host": SSH_TARGET, "port": SSH_PORT}))
             
-            # Connect in thread pool to prevent event loop blocking
-            await loop.run_in_executor(
-                None,
-                lambda: ssh.connect(
-                    host,
-                    port=port,
-                    username=username,
-                    password=password or None,
-                    timeout=15
-                )
+            cmd = []
+            if SSHPASS:
+                cmd += ["sshpass", "-p", SSHPASS]
+            cmd += [
+                "ssh", "-M", "-S", SOCKET_PATH, 
+                "-p", str(SSH_PORT), 
+                "-N", "-f", 
+                "-o", "ControlPersist=10m", 
+                "-o", "StrictHostKeyChecking=no", 
+                SSH_TARGET
+            ]
+            
+            p = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
-        except Exception as e:
-            await websocket.send(json.dumps({"type": "error", "message": f"SSH connection failed: {str(e)}"}))
-            return
+            stdout, stderr = await p.communicate()
+            if p.returncode != 0:
+                await websocket.send(json.dumps({"type": "error", "message": f"SSH connection failed: {stderr.decode('utf-8')}"}))
+                return
 
-        await websocket.send(json.dumps({"type": "connected", "host": host, "port": port}))
-        sftp = await loop.run_in_executor(None, ssh.open_sftp)
-        channel = await loop.run_in_executor(
-            None,
-            lambda: ssh.invoke_shell(term="xterm-256color", width=80, height=24)
+        await websocket.send(json.dumps({"type": "connected", "host": SSH_TARGET, "port": SSH_PORT}))
+
+        # Spawn native ssh client as subprocess for the PTY shell
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "ControlPath=" + SOCKET_PATH, "-t", SSH_TARGET,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
 
         async def read_pty():
             while True:
                 try:
-                    # channel.recv is blocking, run in executor
-                    data = await loop.run_in_executor(None, channel.recv, 4096)
-                    if not data: 
-                        break
+                    data = await proc.stdout.read(4096)
+                    if not data: break
                     text = data.decode("utf-8", errors="replace")
                     await websocket.send(json.dumps({"type": "stdout", "data": text}))
-                except Exception: 
-                    break
+                except Exception: break
 
         async def write_pty():
             try:
@@ -134,96 +137,115 @@ async def handler(websocket):
                     req_id = msg.get("id", "")
 
                     if t == "stdin":
-                        await loop.run_in_executor(None, channel.send, msg["data"].encode("utf-8"))
+                        proc.stdin.write(msg["data"].encode("utf-8"))
+                        await proc.stdin.drain()
                     elif t == "resize":
-                        await loop.run_in_executor(None, channel.resize_pty, msg["cols"], msg["rows"])
+                        pass
                     elif t == "list_dir":
                         path = msg["path"]
+                        python_cmd = (
+                            f"import os, json, stat; "
+                            f"path = os.path.expanduser({repr(path)}); "
+                            f"res = []; "
+                            f"try: "
+                            f"  for name in os.listdir(path): "
+                            f"    try: "
+                            f"      full = os.path.join(path, name); "
+                            f"      st = os.lstat(full); "
+                            f"      is_dir = stat.S_ISDIR(st.st_mode); "
+                            f"      is_link = stat.S_ISLNK(st.st_mode); "
+                            f"      size = st.st_size if not is_dir else 0; "
+                            f"      res.append({{'name': name, 'is_dir': is_dir, 'is_symlink': is_link, 'size': size}}); "
+                            f"    except: pass; "
+                            f"  print(json.dumps({{'status': 'success', 'entries': res}})); "
+                            f"except Exception as err: "
+                            f"  print(json.dumps({{'status': 'error', 'message': str(err)}}));"
+                        )
+                        
+                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c {repr(python_cmd)}")
                         try:
-                            expanded_path = path
-                            if path.startswith("~"):
-                                home = await loop.run_in_executor(None, lambda: sftp.normalize("."))
-                                expanded_path = path.replace("~", home, 1)
-                            
-                            attrs = await loop.run_in_executor(None, sftp.listdir_attr, expanded_path)
-                            entries = []
-                            for attr in attrs:
-                                if attr.filename in (".", ".."): continue
-                                permissions = attr.st_mode or 0
-                                is_dir = stat.S_ISDIR(permissions)
-                                is_link = stat.S_ISLNK(permissions)
-                                size = attr.st_size or 0
-                                entries.append({
-                                    "name": attr.filename,
-                                    "is_dir": is_dir,
-                                    "is_symlink": is_link,
-                                    "size": size
-                                })
-                            await websocket.send(json.dumps({
-                                "type": "list_dir_result",
-                                "path": path,
-                                "id": req_id,
-                                "entries": entries
-                            }))
-                        except Exception as err:
-                            await websocket.send(json.dumps({
-                                "type": "error",
-                                "path": path,
-                                "id": req_id,
-                                "message": f"Failed to list directory: {str(err)}"
-                            }))
+                            data = json.loads(stdout.strip())
+                            if data.get("status") == "success":
+                                await websocket.send(json.dumps({
+                                    "type": "list_dir_result",
+                                    "path": path,
+                                    "id": req_id,
+                                    "entries": data["entries"]
+                                }))
+                                continue
+                        except: pass
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "path": path,
+                            "id": req_id,
+                            "message": f"Failed to list directory: {stdout or stderr}"
+                        }))
                     elif t == "read_file":
                         path = msg["path"]
-                        try:
-                            expanded_path = path
-                            if path.startswith("~"):
-                                home = await loop.run_in_executor(None, lambda: sftp.normalize("."))
-                                expanded_path = path.replace("~", home, 1)
-                            
-                            def read_all():
-                                with sftp.open(expanded_path, "r") as f:
-                                    return f.read()
-                                    
-                            content = await loop.run_in_executor(None, read_all)
-                            await websocket.send(json.dumps({
-                                "type": "read_file_result",
-                                "path": path,
-                                "id": req_id,
-                                "content": content
-                            }))
-                        except Exception as err:
+                        python_cmd = (
+                            f"import os, base64; "
+                            f"path = os.path.expanduser({repr(path)}); "
+                            f"try: "
+                            f"  with open(path, 'rb') as f: "
+                            f"    print(base64.b64encode(f.read()).decode('utf-8')); "
+                            f"except Exception as err: "
+                            f"  print('ERROR:' + str(err));"
+                        )
+                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c {repr(python_cmd)}")
+                        output = stdout.strip()
+                        if output.startswith("ERROR:"):
                             await websocket.send(json.dumps({
                                 "type": "error",
                                 "path": path,
                                 "id": req_id,
-                                "message": f"Failed to read file: {str(err)}"
+                                "message": output[6:]
                             }))
+                        else:
+                            try:
+                                content = base64.b64decode(output).decode('utf-8', errors='replace')
+                                await websocket.send(json.dumps({
+                                    "type": "read_file_result",
+                                    "path": path,
+                                    "id": req_id,
+                                    "content": content
+                                }))
+                            except Exception as err:
+                                await websocket.send(json.dumps({
+                                    "type": "error",
+                                    "path": path,
+                                    "id": req_id,
+                                    "message": f"Failed to read file: {str(err)}"
+                                }))
                     elif t == "write_file":
                         path = msg["path"]
                         content = msg["content"]
-                        try:
-                            expanded_path = path
-                            if path.startswith("~"):
-                                home = await loop.run_in_executor(None, lambda: sftp.normalize("."))
-                                expanded_path = path.replace("~", home, 1)
-                            
-                            def write_all():
-                                with sftp.open(expanded_path, "w") as f:
-                                    f.write(content)
-                                    
-                            await loop.run_in_executor(None, write_all)
+                        content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+                        python_cmd = (
+                            f"import os, base64; "
+                            f"path = os.path.expanduser({repr(path)}); "
+                            f"content = base64.b64decode({repr(content_b64)}); "
+                            f"try: "
+                            f"  with open(path, 'wb') as f: "
+                            f"    f.write(content); "
+                            f"  print('SUCCESS'); "
+                            f"except Exception as err: "
+                            f"  print('ERROR:' + str(err));"
+                        )
+                        stdout, stderr, code = await run_cmd_over_ssh(f"python3 -c {repr(python_cmd)}")
+                        output = stdout.strip()
+                        if output == "SUCCESS":
                             await websocket.send(json.dumps({
                                 "type": "write_file_result",
                                 "path": path,
                                 "id": req_id,
                                 "success": True
                             }))
-                        except Exception as err:
+                        else:
                             await websocket.send(json.dumps({
                                 "type": "error",
                                 "path": path,
                                 "id": req_id,
-                                "message": f"Failed to write file: {str(err)}"
+                                "message": f"Failed to write file: {stdout or stderr or output}"
                             }))
                     elif t == "disconnect": 
                         break
@@ -232,33 +254,27 @@ async def handler(websocket):
 
         await asyncio.gather(read_pty(), write_pty())
     except Exception as e:
-        try: 
-            await websocket.send(json.dumps({"type": "error", "message": str(e)}))
-        except: 
-            pass
+        try: await websocket.send(json.dumps({"type": "error", "message": str(e)}))
+        except: pass
     finally:
-        if channel:
-            try: channel.close()
+        # Clean up socket on disconnect
+        if os.path.exists(SOCKET_PATH):
+            try: subprocess.run(["ssh", "-O", "exit", "-S", SOCKET_PATH, SSH_TARGET], capture_output=True)
             except: pass
-        if sftp:
-            try: sftp.close()
-            except: pass
-        if ssh:
-            try: ssh.close()
+        if proc:
+            try: proc.kill()
             except: pass
 
 async def main():
     try:
         import websockets
-        import paramiko
     except ImportError:
         print("[*] Installing requirements...", flush=True)
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets", "paramiko"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets"])
         import websockets
-        import paramiko
     print()
-    print("  \033[1m\033[38;5;208m🔥 OpenDeck Bridge (Paramiko Multiplexed)\033[0m")
-    print("  \033[2m──────────────────────────────────────────\033[0m")
+    print("  \033[1m\033[38;5;208m🔥 OpenDeck Bridge (Native OpenSSH ControlMaster)\033[0m")
+    print("  \033[2m────────────────────────────────────────────────────\033[0m")
     print(f"  WebSocket: ws://127.0.0.1:{WEBSOCKET_PORT}")
     if SSH_TARGET:
         print(f"  SSH:       {SSH_TARGET} ({'password' if SSHPASS else 'key'})")
@@ -294,6 +310,10 @@ pkill -f bridge.py || true
 if [ -f bridge.pid ]; then
     kill $(cat bridge.pid) 2>/dev/null || true
     rm bridge.pid
+fi
+if os_exists_socket=$(ls sockets/ssh_mux* 2>/dev/null); then
+    # Exit existing multiplex socket connections
+    ssh -O exit -S sockets/ssh_mux "$TARGET" 2>/dev/null || true
 fi
 if command -v lsof &>/dev/null; then
     lsof -t -i :8080 | xargs kill -9 2>/dev/null || true
