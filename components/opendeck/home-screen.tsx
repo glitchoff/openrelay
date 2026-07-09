@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useConnectionStore } from "@/store/connection-store";
+import { useUiStore } from "@/store/ui-store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -33,6 +34,14 @@ function TrashIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" className="size-4">
       <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TerminalIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="size-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 17l4-4-4-4M12 19h8" />
     </svg>
   );
 }
@@ -169,6 +178,7 @@ export function HomeScreen() {
   const port = useConnectionStore((s) => s.port);
   const disconnect = useConnectionStore((s) => s.disconnect);
   const setProjectPath = useConnectionStore((s) => s.setProjectPath);
+  const setActiveView = useUiStore((s) => s.setActiveView);
 
   const [recentProjects, setRecentProjects] = useState<string[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -246,6 +256,26 @@ export function HomeScreen() {
                 />
               </DialogContent>
             </Dialog>
+          </CardContent>
+        </Card>
+
+        {/* Direct Terminal Card */}
+        <Card className="bg-zinc-900/40 border-zinc-800 rounded-3xl">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base text-zinc-200">Direct Terminal</CardTitle>
+            <CardDescription className="text-xs text-zinc-500">Open a shell on your remote machine without selecting a project.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              onClick={() => {
+                setProjectPath("~");
+                setActiveView("terminal");
+              }}
+              className="w-full h-14 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 font-semibold rounded-2xl gap-2 flex items-center justify-center transition-all border border-zinc-700"
+            >
+              <TerminalIcon />
+              <span>Open Terminal</span>
+            </Button>
           </CardContent>
         </Card>
 

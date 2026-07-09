@@ -40,6 +40,14 @@ function ArrowLeft() {
   );
 }
 
+function TerminalIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 17l4-4-4-4M12 19h8" />
+    </svg>
+  );
+}
+
 export function ExplorerPanel() {
   const listDir = useConnectionStore((s) => s.listDir);
   const readFile = useConnectionStore((s) => s.readFile);
@@ -58,10 +66,12 @@ export function ExplorerPanel() {
 
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
 
     listDir(currentPath)
       .then((result) => {
@@ -74,9 +84,10 @@ export function ExplorerPanel() {
         setEntries(sorted);
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
         setEntries([]);
+        setError(err.message || "Failed to load directory");
         setLoading(false);
       });
 
@@ -136,15 +147,41 @@ export function ExplorerPanel() {
             })}
           </div>
         </div>
-        {status === "connected" && (
-          <span className="size-1.5 rounded-full bg-green-500 shrink-0" />
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => setActiveView("terminal")}
+            title="Open Terminal"
+            className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-orange-400 transition-colors"
+          >
+            <TerminalIcon />
+          </button>
+          <span
+            className={`size-1.5 rounded-full transition-colors ${
+              status === "connected" ? "bg-green-500" : "bg-zinc-700"
+            }`}
+          />
+        </div>
       </div>
 
       <ScrollArea className="flex-1">
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="size-5 rounded-full border-2 border-zinc-700 border-t-orange-500 animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="p-4 text-center">
+            <p className="text-xs text-red-500 font-mono mb-2 break-all">{error}</p>
+            <button
+              onClick={() => {
+                // Re-trigger load by changing currentPath to itself to re-trigger useEffect
+                const p = currentPath;
+                setCurrentPath("");
+                setTimeout(() => setCurrentPath(p), 10);
+              }}
+              className="text-[10px] text-zinc-400 hover:text-zinc-200 underline"
+            >
+              Retry
+            </button>
           </div>
         ) : entries.length === 0 ? (
           <p className="text-center text-sm text-zinc-600 py-12">Empty directory</p>

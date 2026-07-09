@@ -7,6 +7,7 @@ const allowedDevOrigins = [
 ];
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   allowedDevOrigins,
   turbopack: {
     root: __dirname,

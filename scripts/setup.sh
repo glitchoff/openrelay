@@ -92,7 +92,7 @@ async def handler(websocket):
 
         await websocket.send(json.dumps({"type": "connected", "host": host, "port": port}))
         sftp = await conn.start_sftp_client()
-        chan = await conn.create_subprocess(term_type="xterm-256color", term_size=(80, 24), encoding=None)
+        chan = await conn.create_subprocess(term_type="xterm-256color", term_size=(80, 24, 0, 0), encoding=None)
 
         async def read_pty():
             while True:
