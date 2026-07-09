@@ -16,7 +16,7 @@ BLUE='\033[1;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-VERSION="1.1.2"
+VERSION="1.2.0"
 BRIDGE_DIR="$HOME/.openrelay"
 CONFIG_FILE="$BRIDGE_DIR/config.sh"
 
@@ -107,33 +107,26 @@ SOCKET_DIR = os.path.expanduser("~/.openrelay/sockets")
 os.makedirs(SOCKET_DIR, exist_ok=True)
 SOCKET_PATH = os.path.join(SOCKET_DIR, "ssh_mux")
 
-async def run_python_over_ssh(script: str) -> tuple[str, str, int]:
-    """Runs python3 on target and pipes the script to it, with python fallback for Windows hosts."""
+async def _ssh(cmd: str, input_data: bytes | None = None, timeout: int = 30) -> tuple[str, str, int]:
+    """Run a command on the remote host via the SSH ControlMaster connection."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ssh", "-o", "ControlPath=" + SOCKET_PATH, SSH_TARGET, "python3",
-            stdin=asyncio.subprocess.PIPE,
+            "ssh", "-o", "ControlPath=" + SOCKET_PATH, "-o", "ConnectTimeout=10",
+            SSH_TARGET, cmd,
+            stdin=asyncio.subprocess.PIPE if input_data is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await proc.communicate(script.encode("utf-8"))
-        stdout_str = stdout.decode("utf-8", errors="replace")
-        stderr_str = stderr.decode("utf-8", errors="replace")
-        
-        if proc.returncode != 0 and ("python3" in stderr_str or "Access is denied" in stderr_str or "not found" in stderr_str or "NativeCommandFailed" in stderr_str):
-            raise Exception("Fallback to python")
-            
-        return stdout_str, stderr_str, proc.returncode
-    except Exception:
-        # Fall back to executing "python" on the host
-        proc = await asyncio.create_subprocess_exec(
-            "ssh", "-o", "ControlPath=" + SOCKET_PATH, SSH_TARGET, "python",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input_data), timeout=timeout
         )
-        stdout, stderr = await proc.communicate(script.encode("utf-8"))
         return stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"), proc.returncode
+    except asyncio.TimeoutError:
+        try: proc.kill()
+        except: pass
+        return "", "Command timed out", -1
+    except Exception as e:
+        return "", str(e), -1
 
 async def handler(websocket):
     proc = None
@@ -203,69 +196,42 @@ async def handler(websocket):
                         pass
                     elif t == "list_dir":
                         path = msg["path"]
-                        python_cmd = f"""
-import os, json, stat
-path = os.path.expanduser({repr(path)})
-res = []
-try:
-    for name in os.listdir(path):
-        try:
-            full = os.path.join(path, name)
-            st = os.lstat(full)
-            is_dir = stat.S_ISDIR(st.st_mode)
-            is_link = stat.S_ISLNK(st.st_mode)
-            size = st.st_size if not is_dir else 0
-            res.append({{
-                "name": name,
-                "is_dir": is_dir,
-                "is_symlink": is_link,
-                "size": size
-            }})
-        except Exception:
-            pass
-    print(json.dumps({{"status": "success", "entries": res}}))
-except Exception as err:
-    print(json.dumps({{"status": "error", "message": str(err)}}))
-"""
-                        stdout, stderr, code = await run_python_over_ssh(python_cmd)
-                        try:
-                            data = json.loads(stdout.strip())
-                            if data.get("status") == "success":
-                                await websocket.send(json.dumps({
-                                    "type": "list_dir_result",
-                                    "path": path,
-                                    "id": req_id,
-                                    "entries": data["entries"]
-                                }))
-                                continue
-                        except: pass
-                        await websocket.send(json.dumps({
-                            "type": "error",
-                            "path": path,
-                            "id": req_id,
-                            "message": f"Failed to list directory: {stdout or stderr}"
-                        }))
-                    elif t == "read_file":
-                        path = msg["path"]
-                        python_cmd = f"""
-import os, base64
-path = os.path.expanduser({repr(path)})
-try:
-    with open(path, "rb") as f:
-        print(base64.b64encode(f.read()).decode("utf-8"))
-except Exception as err:
-    print("ERROR:" + str(err))
-"""
-                        stdout, stderr, code = await run_python_over_ssh(python_cmd)
-                        output = stdout.strip()
-                        if output.startswith("ERROR:"):
+                        escaped = path.replace("'", "'\\''")
+                        sh_cmd = f"cd '{escaped}' 2>/dev/null || cd ~ 2>/dev/null; for e in * .*; do [ \"$e\" = \".\" ] && continue; [ \"$e\" = \"..\" ] && continue; if [ -L \"$e\" ]; then t=l; s=0; elif [ -d \"$e\" ]; then t=d; s=0; else s=$(wc -c < \"$e\" 2>/dev/null || echo 0); t=f; fi; printf '%s\\t%s\\t%s\\n' \"$t\" \"$s\" \"$e\"; done"
+                        stdout, stderr, code = await _ssh(sh_cmd)
+                        if code == 0:
+                            entries = []
+                            for line in stdout.strip().split('\n'):
+                                if not line: continue
+                                parts = line.split('\t', 2)
+                                if len(parts) < 3: continue
+                                t, s, name = parts
+                                entries.append({
+                                    "name": name,
+                                    "is_dir": t == 'd',
+                                    "is_symlink": t == 'l',
+                                    "size": int(s) if s.isdigit() else 0
+                                })
+                            await websocket.send(json.dumps({
+                                "type": "list_dir_result",
+                                "path": path,
+                                "id": req_id,
+                                "entries": entries
+                            }))
+                        else:
                             await websocket.send(json.dumps({
                                 "type": "error",
                                 "path": path,
                                 "id": req_id,
-                                "message": output[6:]
+                                "message": f"Failed to list directory: {stderr or stdout}"
                             }))
-                        else:
+                    elif t == "read_file":
+                        path = msg["path"]
+                        escaped = path.replace("'", "'\\''")
+                        sh_cmd = f"base64 < '{escaped}' 2>/dev/null || python3 -c \"import sys,base64; print(base64.b64encode(open(sys.argv[1],'rb').read()).decode())\" '{escaped}' 2>/dev/null || python -c \"import sys,base64; print(base64.b64encode(open(sys.argv[1],'rb').read()).decode())\" '{escaped}'"
+                        stdout, stderr, code = await _ssh(sh_cmd)
+                        output = stdout.strip()
+                        if code == 0 and output:
                             try:
                                 content = base64.b64decode(output).decode('utf-8', errors='replace')
                                 await websocket.send(json.dumps({
@@ -279,26 +245,23 @@ except Exception as err:
                                     "type": "error",
                                     "path": path,
                                     "id": req_id,
-                                    "message": f"Failed to read file: {str(err)}"
+                                    "message": f"Failed to decode file: {str(err)}"
                                 }))
+                        else:
+                            await websocket.send(json.dumps({
+                                "type": "error",
+                                "path": path,
+                                "id": req_id,
+                                "message": f"Failed to read file: {stderr or 'Empty output'}"
+                            }))
                     elif t == "write_file":
                         path = msg["path"]
                         content = msg["content"]
                         content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
-                        python_cmd = f"""
-import os, base64
-path = os.path.expanduser({repr(path)})
-content = base64.b64decode({repr(content_b64)})
-try:
-    with open(path, "wb") as f:
-        f.write(content)
-    print("SUCCESS")
-except Exception as err:
-    print("ERROR:" + str(err))
-"""
-                        stdout, stderr, code = await run_python_over_ssh(python_cmd)
-                        output = stdout.strip()
-                        if output == "SUCCESS":
+                        escaped = path.replace("'", "'\\''")
+                        sh_cmd = f"base64 -d > '{escaped}' 2>/dev/null || python3 -c \"import sys,base64; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))\" > '{escaped}' 2>/dev/null || python -c \"import sys,base64; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))\" > '{escaped}'"
+                        stdout, stderr, code = await _ssh(sh_cmd, input_data=content_b64.encode())
+                        if code == 0:
                             await websocket.send(json.dumps({
                                 "type": "write_file_result",
                                 "path": path,
@@ -310,7 +273,7 @@ except Exception as err:
                                 "type": "error",
                                 "path": path,
                                 "id": req_id,
-                                "message": f"Failed to write file: {stdout or stderr or output}"
+                                "message": f"Failed to write file: {stderr or stdout}"
                             }))
                     elif t == "disconnect": 
                         break
