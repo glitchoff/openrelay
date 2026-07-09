@@ -113,22 +113,13 @@ async def handler(websocket):
                 encoding=None
             )
             ptys[new_id] = chan
-            task = asyncio.create_task(read_one_pty(new_id))
-            reader_tasks.append(task)
+            # Send pty_created BEFORE starting reader so client wires callback first
             await websocket.send(
                 json.dumps({"type": "pty_created", "pty_id": new_id})
             )
+            task = asyncio.create_task(read_one_pty(new_id))
+            reader_tasks.append(task)
             return new_id
-
-        # Create initial PTY (id=0)
-        chan0 = await conn.create_subprocess(
-            make_pty_cmd(None),
-            term_type="xterm-256color",
-            term_size=(80, 24),
-            encoding=None
-        )
-        ptys[0] = chan0
-        reader_tasks.append(asyncio.create_task(read_one_pty(0)))
 
         async def handle_messages():
             try:

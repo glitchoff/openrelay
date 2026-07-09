@@ -128,46 +128,14 @@ async def handler(websocket):
                     except Exception:
                         pass
 
-            task = asyncio.create_task(read_pty(new_id))
-            reader_tasks.append(task)
             await websocket.send(json.dumps({
                 "type": "pty_created",
                 "pty_id": new_id,
             }))
+            # Start reader AFTER pty_created so client wires callback first
+            task = asyncio.create_task(read_pty(new_id))
+            reader_tasks.append(task)
             return new_id
-
-        # ── spawn initial local shell (id=0) ───────────────────────────────
-        first_cwd = os.getcwd()
-        proc0 = await asyncio.create_subprocess_exec(
-            *SHELL_CMD,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=first_cwd,
-        )
-        ptys[0] = proc0
-
-        async def read_pty0():
-            try:
-                while True:
-                    data = await proc0.stdout.read(4096)
-                    if not data:
-                        break
-                    await websocket.send(json.dumps({
-                        "type": "stdout",
-                        "pty_id": 0,
-                        "data": data.decode("utf-8", errors="replace"),
-                    }))
-            except Exception:
-                pass
-            finally:
-                ptys.pop(0, None)
-                try:
-                    proc0.kill()
-                except Exception:
-                    pass
-
-        reader_tasks.append(asyncio.create_task(read_pty0()))
 
         # ── pump WS messages → shell / fs ops ─────────────────────────────
         async def handle_messages():

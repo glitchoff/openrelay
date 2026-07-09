@@ -327,6 +327,8 @@ class OpenRelayConnection:
 
         self.closed = False
 
+        self.reader_tasks = []
+
         self.send_lock = asyncio.Lock()
 
 
@@ -820,6 +822,22 @@ class OpenRelayConnection:
             f"{self.connection_id}: "
             "closing connection"
         )
+
+
+        # --------------------------------------------------------
+        # Cancel reader tasks
+        # --------------------------------------------------------
+
+        for task in self.reader_tasks:
+
+            task.cancel()
+
+        if self.reader_tasks:
+
+            await asyncio.gather(
+                *self.reader_tasks,
+                return_exceptions=True,
+            )
 
 
         # --------------------------------------------------------
@@ -1318,6 +1336,22 @@ async def websocket_reader(
 
                 })
 
+
+                # Start reader AFTER pty_created so client
+                # wires callback before any stdout arrives
+
+                task = asyncio.create_task(
+
+                    connection.read_shell(
+                        pty_id
+                    )
+
+                )
+
+                connection.reader_tasks.append(
+                    task
+                )
+
             except Exception as error:
 
                 await connection.send({
@@ -1447,8 +1481,6 @@ async def handler(websocket):
 
     connection = None
 
-    reader_tasks = []
-
 
     try:
 
@@ -1575,35 +1607,7 @@ async def handler(websocket):
 
 
         # --------------------------------------------------------
-        # Start initial PTY (id=0)
-        # --------------------------------------------------------
-
-        shell_id = await connection.start_shell(
-            cols,
-            rows,
-            cwd=None,
-        )
-
-
-        # --------------------------------------------------------
-        # Start PTY reader tasks
-        # --------------------------------------------------------
-
-        shell_task = asyncio.create_task(
-
-            connection.read_shell(
-                shell_id
-            )
-
-        )
-
-        reader_tasks.append(
-            shell_task
-        )
-
-
-        # --------------------------------------------------------
-        # Run WebSocket reader (creates more PTYs as needed)
+        # Run WebSocket reader (creates PTYs on demand)
         # --------------------------------------------------------
 
         websocket_task = asyncio.create_task(
