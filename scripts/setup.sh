@@ -16,20 +16,61 @@ BLUE='\033[1;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo ""
-echo -e "${BOLD}  🔥 OpenDeck Bridge Setup${NC}"
-echo -e "${DIM}  ──────────────────────────${NC}"
+VERSION="1.1.0"
+BRIDGE_DIR="$HOME/.opendeck"
+CONFIG_FILE="$BRIDGE_DIR/config.sh"
+
+echo -e "${YELLOW}"
+echo "   ____                     ____             __    "
+echo "  / __ \____  ___  ____  / __ \___  _______/ /__  "
+echo " / / / / __ \/ _ \/ __ \/ / / / _ \/ ___/ //_/ / /"
+echo "/ /_/ / /_/ /  __/ / / / /_/ /  __/ /__/ ,< / /_/ "
+echo "\____/ .___/\___/_/ /_/\____/\___/\___/_/|_|\__, / "
+echo "    /_/                                    /____/  "
+echo -e "${NC}"
+echo -e "${BOLD}  🔥 OpenDeck Bridge Setup v${VERSION}${NC}"
+echo -e "${DIM}  ──────────────────────────────────────────${NC}"
 echo ""
 
 # --- Always read from terminal, even when piped ---
 exec < /dev/tty
 
-# --- Get SSH target ---
-read -p "$(echo -e "${BLUE}?${NC} SSH target ${DIM}(user@host)${NC}: ")" TARGET
-read -sp "$(echo -e "${BLUE}?${NC} SSH password ${DIM}(or blank for key auth)${NC}: ")" PASSWORD
-echo ""
-read -p "$(echo -e "${BLUE}?${NC} SSH port ${DIM}[22]${NC}: ")" PORT
-PORT=${PORT:-22}
+# --- Load previous configuration if exists ---
+PREV_TARGET=""
+PREV_PORT="22"
+PREV_PASSWORD=""
+if [ -f "$CONFIG_FILE" ]; then
+    PREV_TARGET=$(grep "export OPENDECK_SSH_TARGET=" "$CONFIG_FILE" | cut -d'"' -f2)
+    PREV_PORT=$(grep "export OPENDECK_SSH_PORT=" "$CONFIG_FILE" | cut -d'"' -f2)
+    PREV_PASSWORD=$(grep "export SSHPASS=" "$CONFIG_FILE" | cut -d'"' -f2)
+fi
+
+TARGET=""
+PORT=""
+PASSWORD=""
+
+if [ -n "$PREV_TARGET" ]; then
+    echo -e "${YELLOW}Found previous configuration:${NC}"
+    echo -e "  SSH Target: ${BLUE}$PREV_TARGET${NC}"
+    echo -e "  SSH Port:   ${BLUE}$PREV_PORT${NC}"
+    echo ""
+    read -p "$(echo -e "${BLUE}?${NC} Use this configuration? (y/n) [y]: ")" USE_PREV
+    USE_PREV=${USE_PREV:-y}
+    if [ "$USE_PREV" = "y" ] || [ "$USE_PREV" = "Y" ]; then
+        TARGET="$PREV_TARGET"
+        PORT="$PREV_PORT"
+        PASSWORD="$PREV_PASSWORD"
+    fi
+    echo ""
+fi
+
+# --- Get SSH target normally if not using previous ---
+if [ -z "$TARGET" ]; then
+    read -p "$(echo -e "${BLUE}?${NC} SSH target ${DIM}(user@host)${NC}: ")" TARGET
+    read -p "$(echo -e "${BLUE}?${NC} SSH password ${DIM}(or blank for key auth)${NC}: ")" PASSWORD
+    read -p "$(echo -e "${BLUE}?${NC} SSH port ${DIM}[22]${NC}: ")" PORT
+    PORT=${PORT:-22}
+fi
 
 echo ""
 echo -e "${YELLOW}▶ Installing dependencies...${NC}"
