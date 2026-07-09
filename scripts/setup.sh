@@ -137,9 +137,9 @@ def _posix_path(path: str) -> str:
     return path
 
 def _ps_path(path: str) -> str:
-    """Escape and wrap for PowerShell, with inline ~→$env:USERPROFILE and /→\\."""
+    """Escape and wrap for PowerShell, with inline ~→$env:USERPROFILE."""
     escaped = path.replace("'", "''")
-    return f"$p='{escaped}';if($p[0]-eq'~'){{$p=$env:USERPROFILE+$p.Substring(1)}};$p=$p -replace '/','\\'"
+    return f"$p='{escaped}';if($p[0]-eq'~'){{$p=$env:USERPROFILE+$p.Substring(1)}}"
 
 def build_list_dir(path: str, is_windows: bool) -> str:
     if is_windows:

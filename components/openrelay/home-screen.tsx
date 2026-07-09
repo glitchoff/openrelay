@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useConnectionStore } from "@/store/connection-store";
 import { useUiStore } from "@/store/ui-store";
 import { Button } from "@/components/ui/button";
@@ -60,19 +60,6 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
   // URL Bar states
   const [isEditingPath, setIsEditingPath] = useState(false);
   const [inputPath, setInputPath] = useState(currentPath);
-  const [showDrives, setShowDrives] = useState(false);
-  const driveRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showDrives) return;
-    const handle = (e: MouseEvent) => {
-      if (driveRef.current && !driveRef.current.contains(e.target as Node)) {
-        setShowDrives(false);
-      }
-    };
-    document.addEventListener("mousedown", handle);
-    return () => document.removeEventListener("mousedown", handle);
-  }, [showDrives]);
 
   const loadDirs = useCallback(async (path: string) => {
     setLoading(true);
@@ -119,8 +106,7 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
 
   const handleFolderClick = (folder: string) => {
     const normalized = currentPath.replace(/\\/g, "/");
-    const isDrive = normalized === "/" && /^[a-zA-Z]:$/.test(folder);
-    const nextPath = isDrive ? folder : normalized.replace(/\/+$/, "") + "/" + folder;
+    const nextPath = normalized.replace(/\/+$/, "") + "/" + folder;
     loadDirs(nextPath);
   };
 
@@ -135,8 +121,6 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
   };
 
   const isWindowsPath = /^[a-zA-Z]:/.test(currentPath);
-  const currentDrive = currentPath.match(/^([a-zA-Z]:)/)?.[1];
-  const winDrives = ["C:", "D:", "E:", "F:"];
   const pathParts = currentPath.replace(/\/+$/, "").replace(/\\/g, "/").split("/").filter(Boolean);
   const isAtRoot = currentPath === "/" || /^[a-zA-Z]:\/+$/.test(currentPath);
 
@@ -227,32 +211,6 @@ function FolderPicker({ onSelect, onClose }: FolderPickerProps) {
             </div>
           </div>
         )}
-
-        <div ref={driveRef} className="relative shrink-0">
-          <button
-            onClick={() => setShowDrives((v) => !v)}
-            className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition-colors"
-            title="Jump to drive"
-          >
-            <svg viewBox="0 0 24 24" fill="none" className="size-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="2" />
-              <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
-            </svg>
-          </button>
-          {showDrives && (
-            <div className="absolute top-full right-0 mt-1 w-28 bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl z-50 py-1.5 text-xs font-mono">
-              {winDrives.map((d) => (
-                <button
-                  key={d}
-                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-800/60 transition-colors ${currentDrive === d ? "text-orange-400" : "text-zinc-300"}`}
-                  onMouseDown={(e) => { e.preventDefault(); setCurrentPath(d); loadDirs(d); setShowDrives(false); }}
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Directory Contents */}
