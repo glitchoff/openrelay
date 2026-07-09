@@ -26,17 +26,20 @@ export interface ResizeMsg {
 export interface ListDirMsg {
   type: "list_dir";
   path: string;
+  id?: string;
 }
 
 export interface ReadFileMsg {
   type: "read_file";
   path: string;
+  id?: string;
 }
 
 export interface WriteFileMsg {
   type: "write_file";
   path: string;
   content: string;
+  id?: string;
 }
 
 export interface DisconnectMsg {
@@ -67,24 +70,28 @@ export interface ListDirResult {
   type: "list_dir_result";
   path: string;
   entries: FileEntry[];
+  id?: string;
 }
 
 export interface ReadFileResult {
   type: "read_file_result";
   path: string;
   content: string;
+  id?: string;
 }
 
 export interface WriteFileResult {
   type: "write_file_result";
   path: string;
   success: true;
+  id?: string;
 }
 
 export interface ErrorResult {
   type: "error";
   message: string;
   path?: string;
+  id?: string;
 }
 
 export type IncomingMsg =

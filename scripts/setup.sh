@@ -114,6 +114,7 @@ async def handler(websocket):
                         chan.change_terminal_size(msg["cols"], msg["rows"])
                     elif t == "list_dir":
                         path = msg["path"]
+                        req_id = msg.get("id", "")
                         try:
                             expanded_path = path
                             if path.startswith("~"):
@@ -136,16 +137,19 @@ async def handler(websocket):
                             await websocket.send(json.dumps({
                                 "type": "list_dir_result",
                                 "path": path,
+                                "id": req_id,
                                 "entries": entries
                             }))
                         except Exception as err:
                             await websocket.send(json.dumps({
                                 "type": "error",
                                 "path": path,
+                                "id": req_id,
                                 "message": f"Failed to list directory: {str(err)}"
                             }))
                     elif t == "read_file":
                         path = msg["path"]
+                        req_id = msg.get("id", "")
                         try:
                             expanded_path = path
                             if path.startswith("~"):
@@ -156,16 +160,19 @@ async def handler(websocket):
                             await websocket.send(json.dumps({
                                 "type": "read_file_result",
                                 "path": path,
+                                "id": req_id,
                                 "content": content
                             }))
                         except Exception as err:
                             await websocket.send(json.dumps({
                                 "type": "error",
                                 "path": path,
+                                "id": req_id,
                                 "message": f"Failed to read file: {str(err)}"
                             }))
                     elif t == "write_file":
                         path = msg["path"]
+                        req_id = msg.get("id", "")
                         content = msg["content"]
                         try:
                             expanded_path = path
@@ -177,12 +184,14 @@ async def handler(websocket):
                             await websocket.send(json.dumps({
                                 "type": "write_file_result",
                                 "path": path,
+                                "id": req_id,
                                 "success": True
                             }))
                         except Exception as err:
                             await websocket.send(json.dumps({
                                 "type": "error",
                                 "path": path,
+                                "id": req_id,
                                 "message": f"Failed to write file: {str(err)}"
                             }))
                     elif t == "disconnect": break

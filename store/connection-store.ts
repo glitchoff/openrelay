@@ -12,6 +12,7 @@ interface ConnectionState {
   port: number;
   ws: WebSocket | null;
   pending: Map<string, Pending>;
+  _nextId: number;
   onStdout: ((data: string) => void) | null;
 
   connect: (host: string, port: number) => void;
@@ -32,6 +33,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   port: 8080,
   ws: null,
   pending: new Map(),
+  _nextId: 1,
   onStdout: null,
   projectPath: null,
   setProjectPath: (path) => set({ projectPath: path }),
@@ -51,6 +53,8 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     ws.onmessage = (event) => {
       try {
         const msg: IncomingMsg = JSON.parse(event.data);
+        const pending = get().pending;
+
         switch (msg.type) {
           case "connected":
             break;
@@ -58,24 +62,29 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
             get().onStdout?.(msg.data);
             break;
           case "list_dir_result": {
-            const p = get().pending.get(msg.path);
-            if (p) { p.resolve(msg.entries); get().pending.delete(msg.path); }
+            // Prefer id-keyed lookup; fall back to path for old bridge versions
+            const key = msg.id ?? msg.path;
+            const p = pending.get(key);
+            if (p) { p.resolve(msg.entries); pending.delete(key); }
             break;
           }
           case "read_file_result": {
-            const p = get().pending.get(msg.path);
-            if (p) { p.resolve(msg.content); get().pending.delete(msg.path); }
+            const key = msg.id ?? msg.path;
+            const p = pending.get(key);
+            if (p) { p.resolve(msg.content); pending.delete(key); }
             break;
           }
           case "write_file_result": {
-            const p = get().pending.get(msg.path);
-            if (p) { p.resolve(undefined); get().pending.delete(msg.path); }
+            const key = msg.id ?? msg.path;
+            const p = pending.get(key);
+            if (p) { p.resolve(undefined); pending.delete(key); }
             break;
           }
           case "error": {
-            const key = msg.path || "error";
-            const p = get().pending.get(key);
-            if (p) { p.reject(new Error(msg.message)); get().pending.delete(key); }
+            // Try id first, then path, then a generic "error" key
+            const key = msg.id ?? msg.path ?? "error";
+            const p = pending.get(key);
+            if (p) { p.reject(new Error(msg.message)); pending.delete(key); }
             break;
           }
         }
@@ -110,21 +119,27 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   listDir: (path: string) =>
     new Promise((resolve, reject) => {
       const state = get();
-      state.pending.set(path, { resolve, reject } as Pending);
-      state.send({ type: "list_dir", path });
+      const id = String(state._nextId);
+      set({ _nextId: state._nextId + 1 });
+      state.pending.set(id, { resolve, reject } as Pending);
+      state.send({ type: "list_dir", path, id });
     }),
 
   readFile: (path: string) =>
     new Promise((resolve, reject) => {
       const state = get();
-      state.pending.set(path, { resolve, reject } as Pending);
-      state.send({ type: "read_file", path });
+      const id = String(state._nextId);
+      set({ _nextId: state._nextId + 1 });
+      state.pending.set(id, { resolve, reject } as Pending);
+      state.send({ type: "read_file", path, id });
     }),
 
   writeFile: (path: string, content: string) =>
     new Promise((resolve, reject) => {
       const state = get();
-      state.pending.set(path, { resolve, reject } as Pending);
-      state.send({ type: "write_file", path, content });
+      const id = String(state._nextId);
+      set({ _nextId: state._nextId + 1 });
+      state.pending.set(id, { resolve, reject } as Pending);
+      state.send({ type: "write_file", path, content, id });
     }),
 }));

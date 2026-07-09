@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useConnectionStore } from "@/store/connection-store";
 import { useEditorStore } from "@/store/editor-store";
@@ -59,25 +59,29 @@ export function ExplorerPanel() {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const loadDir = useCallback(async (path: string) => {
-    setLoading(true);
-    try {
-      const result = await listDir(path);
-      const sorted = result.sort((a, b) => {
-        if (a.is_dir && !b.is_dir) return -1;
-        if (!a.is_dir && b.is_dir) return 1;
-        return a.name.localeCompare(b.name);
-      });
-      setEntries(sorted);
-    } catch {
-      setEntries([]);
-    }
-    setLoading(false);
-  }, [listDir]);
-
   useEffect(() => {
-    loadDir(currentPath);
-  }, [currentPath, loadDir]);
+    let cancelled = false;
+    setLoading(true);
+
+    listDir(currentPath)
+      .then((result) => {
+        if (cancelled) return;
+        const sorted = result.sort((a, b) => {
+          if (a.is_dir && !b.is_dir) return -1;
+          if (!a.is_dir && b.is_dir) return 1;
+          return a.name.localeCompare(b.name);
+        });
+        setEntries(sorted);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setEntries([]);
+        setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [currentPath, listDir]);
 
   function goUp() {
     const parent = currentPath.replace(/\/+$/, "").split("/").slice(0, -1).join("/") || "/";
